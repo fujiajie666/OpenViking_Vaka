@@ -36,8 +36,6 @@ class SessionCompressorV2:
     ):
         """Initialize session compressor."""
         self.vikingdb = vikingdb
-        # registry 现在由 provider 负责加载，这里不再初始化
-        # MemoryUpdater 会在 apply_operations 时从 provider 获取 registry
         pass
 
     def _get_or_create_react(
@@ -235,7 +233,7 @@ class SessionCompressorV2:
 
             # Apply operations with isolation_handler
             result = await updater.apply_operations(
-                operations, ctx, registry=registry, extract_context=extract_context, isolation_handler=isolation_handler
+                operations, ctx, extract_context=extract_context, isolation_handler=isolation_handler
             )
 
             tracer.info(

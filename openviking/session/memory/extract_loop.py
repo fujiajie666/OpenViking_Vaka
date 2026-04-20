@@ -501,7 +501,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                         extract_context=self._extract_context,
                     )
                 except Exception as e:
-                    logger.warning(f"Failed to resolve URI for {item}: {e}")
+                    tracer.error(f"Failed to resolve URI for {item}: {e}", e)
                     continue
 
                 if uri in self._read_files:

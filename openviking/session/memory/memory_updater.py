@@ -242,7 +242,6 @@ class MemoryUpdater:
         self,
         operations: Any,
         ctx: RequestContext,
-        registry: Any = None,
         extract_context: Any = None,
         isolation_handler: Any = None,
     ) -> MemoryUpdateResult:
@@ -269,15 +268,15 @@ class MemoryUpdater:
             return result
 
         # Use provided registry or fall back to self._registry
-        use_registry = registry if registry is not None else self._registry
-        if not use_registry:
+
+        if not self._registry:
             raise ValueError("MemoryTypeRegistry is required for URI resolution")
 
         # Resolve all URIs first (pass extract_context for template rendering)
         logger.info(f"[MemoryUpdater] applying operations, isolation_handler={isolation_handler}")
         resolved_ops = resolve_all_operations(
             operations,
-            use_registry,
+            self._registry,
             extract_context=extract_context,
             isolation_handler=isolation_handler,
         )
