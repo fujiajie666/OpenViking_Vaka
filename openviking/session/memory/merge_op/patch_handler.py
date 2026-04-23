@@ -830,7 +830,7 @@ class MemoryPatchHandler:
         else:
             # If failed but patch was valid (e.g., search content not found), fall back to appending
             error_msg = result.error or "Unknown error"
-            logger.warning(f"Patch application failed, falling back to append: {error_msg}")
+            logger.warning(f"Patch application failed, falling back to append: {error_msg}, original_content={original_content}, patch={patch}")
             return original_content + "\n" + self._extract_replace_content(patch)
 
     def _extract_replace_content(self, patch: str) -> str:
