@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -53,68 +53,58 @@ class OpenVikingConfig(BaseModel):
     default_agent: Optional[str] = Field(default="default", description="Default agent identifier")
 
     storage: StorageConfig = Field(
-        default_factory=lambda: StorageConfig(), description="Storage configuration"
+        default_factory=StorageConfig, description="Storage configuration"
     )
 
     embedding: EmbeddingConfig = Field(
-        default_factory=lambda: EmbeddingConfig(), description="Embedding configuration"
+        default_factory=EmbeddingConfig, description="Embedding configuration"
     )
 
-    vlm: VLMConfig = Field(default_factory=lambda: VLMConfig(), description="VLM configuration")
+    vlm: VLMConfig = Field(default_factory=VLMConfig, description="VLM configuration")
 
-    rerank: RerankConfig = Field(
-        default_factory=lambda: RerankConfig(), description="Rerank configuration"
-    )
+    rerank: RerankConfig = Field(default_factory=RerankConfig, description="Rerank configuration")
 
     # Encryption configuration
     encryption: EncryptionConfig = Field(
-        default_factory=lambda: EncryptionConfig(), description="Encryption configuration"
+        default_factory=EncryptionConfig, description="Encryption configuration"
     )
 
     # Parser configurations
-    pdf: PDFConfig = Field(
-        default_factory=lambda: PDFConfig(), description="PDF parsing configuration"
-    )
+    pdf: PDFConfig = Field(default_factory=PDFConfig, description="PDF parsing configuration")
 
-    code: CodeConfig = Field(
-        default_factory=lambda: CodeConfig(), description="Code parsing configuration"
-    )
+    code: CodeConfig = Field(default_factory=CodeConfig, description="Code parsing configuration")
 
     image: ImageConfig = Field(
-        default_factory=lambda: ImageConfig(), description="Image parsing configuration"
+        default_factory=ImageConfig, description="Image parsing configuration"
     )
 
     audio: AudioConfig = Field(
-        default_factory=lambda: AudioConfig(), description="Audio parsing configuration"
+        default_factory=AudioConfig, description="Audio parsing configuration"
     )
 
     video: VideoConfig = Field(
-        default_factory=lambda: VideoConfig(), description="Video parsing configuration"
+        default_factory=VideoConfig, description="Video parsing configuration"
     )
 
     markdown: MarkdownConfig = Field(
-        default_factory=lambda: MarkdownConfig(), description="Markdown parsing configuration"
+        default_factory=MarkdownConfig, description="Markdown parsing configuration"
     )
 
-    html: HTMLConfig = Field(
-        default_factory=lambda: HTMLConfig(), description="HTML parsing configuration"
-    )
+    html: HTMLConfig = Field(default_factory=HTMLConfig, description="HTML parsing configuration")
 
-    text: TextConfig = Field(
-        default_factory=lambda: TextConfig(), description="Text parsing configuration"
-    )
+    text: TextConfig = Field(default_factory=TextConfig, description="Text parsing configuration")
 
     directory: DirectoryConfig = Field(
-        default_factory=lambda: DirectoryConfig(), description="Directory parsing configuration"
+        default_factory=DirectoryConfig, description="Directory parsing configuration"
     )
 
     feishu: FeishuConfig = Field(
-        default_factory=lambda: FeishuConfig(),
+        default_factory=FeishuConfig,
         description="Feishu/Lark document parsing configuration",
     )
 
     semantic: SemanticConfig = Field(
-        default_factory=lambda: SemanticConfig(),
+        default_factory=SemanticConfig,
         description="Semantic processing configuration (overview/abstract limits)",
     )
 
@@ -136,10 +126,30 @@ class OpenVikingConfig(BaseModel):
     language_fallback: str = Field(
         default="en",
         description=(
-            "Fallback language used by memory extraction and semantic processing when dominant "
-            "user language cannot be confidently detected"
+            "Deprecated. No longer used — detection falls back to 'en' when no language can be "
+            "inferred. Set output_language_override instead to pin an explicit language."
         ),
     )
+
+    output_language_override: str = Field(
+        default="",
+        description=(
+            "When non-empty, bypasses content-based language detection for memory extraction "
+            "and semantic summaries/overviews and forces this language instead. Use when your "
+            "corpus is mixed-language but you want summaries pinned to a single language "
+            "(e.g., 'en', 'zh-CN', 'ja'). Leave empty (default) to auto-detect per content."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _warn_on_deprecated_language_fallback(self) -> "OpenVikingConfig":
+        if self.language_fallback and self.language_fallback != "en":
+            logging.getLogger(__name__).warning(
+                "Config field 'language_fallback=%s' is deprecated and has no effect; "
+                "remove it, or set 'output_language_override' to pin an explicit language.",
+                self.language_fallback,
+            )
+        return self
 
     allow_private_networks: bool = Field(
         default=False,
@@ -149,17 +159,15 @@ class OpenVikingConfig(BaseModel):
         ),
     )
 
-    log: LogConfig = Field(default_factory=lambda: LogConfig(), description="Logging configuration")
+    log: LogConfig = Field(default_factory=LogConfig, description="Logging configuration")
 
-    memory: MemoryConfig = Field(
-        default_factory=lambda: MemoryConfig(), description="Memory configuration"
-    )
+    memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Memory configuration")
 
     telemetry: "TelemetryConfig" = Field(
-        default_factory=lambda: TelemetryConfig(), description="Telemetry configuration"
+        default_factory=TelemetryConfig, description="Telemetry configuration"
     )
     prompts: PromptsConfig = Field(
-        default_factory=lambda: PromptsConfig(),
+        default_factory=PromptsConfig,
         description="Prompt template configuration",
     )
 

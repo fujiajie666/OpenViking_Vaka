@@ -18,6 +18,7 @@ import jinja2
 
 from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperations
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.utils.model import model_to_dict
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -207,6 +208,27 @@ def is_uri_allowed(
 from openviking.session.memory.utils.model import model_to_dict
 
 
+def extract_uri_fields_from_flat_model(model: Any, schema: MemoryTypeSchema) -> Dict[str, Any]:
+    """
+    Extract URI-friendly fields from a flat model, ignoring patch objects.
+
+    Args:
+        model: Flat model instance (Pydantic model or dict)
+        schema: Memory type schema to know which fields are part of the schema
+
+    Returns:
+        Dict with only primitive type values suitable for URI generation
+    """
+    # Convert model to dict if it's a Pydantic model
+    model_dict = model_to_dict(model)
+
+    uri_fields = {}
+    # Only include fields that are in the schema
+    schema_field_names = {f.name for f in schema.fields}
+    for name, value in model_dict.items():
+        if name in schema_field_names and isinstance(value, (str, int, float, bool)):
+            uri_fields[name] = value
+    return uri_fields
 
 
 

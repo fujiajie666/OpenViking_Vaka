@@ -17,7 +17,6 @@ from openviking.server.api_keys import APIKeyManager
 from openviking.server.config import ServerConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import sessions as sessions_router
-from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -308,20 +307,25 @@ async def test_add_message_admin_request_allows_registered_user_role_id(service,
     assert session.messages[-1].role_id == "alice"
 
 
-async def test_add_message_user_request_rejects_explicit_role_id(service, monkeypatch):
+async def test_add_message_user_request_allows_explicit_role_id(service, monkeypatch):
+    session_id = "user-explicit-role-id"
     ctx = RequestContext(
         user=UserIdentifier("acct_session_user", "alice", "assistant-user"),
         role=Role.USER,
     )
 
-    with pytest.raises(InvalidArgumentError, match="cannot explicitly set role_id"):
-        await _call_add_message_route(
-            service,
-            monkeypatch,
-            ctx=ctx,
-            payload=_message_request("user", content="hello user", role_id="alice"),
-            session_id="user-explicit-role-id",
-        )
+    response = await _call_add_message_route(
+        service,
+        monkeypatch,
+        ctx=ctx,
+        payload=_message_request("user", content="hello user", role_id="wx/user-01@abc"),
+        session_id=session_id,
+    )
+
+    assert response.result["message_count"] == 1
+    session = await service.sessions.get(session_id, ctx, auto_create=False)
+    await session.load()
+    assert session.messages[-1].role_id == "wx/user-01@abc"
 
 
 async def test_add_message_user_request_autofills_role_id(service, monkeypatch):
@@ -345,7 +349,7 @@ async def test_add_message_user_request_autofills_role_id(service, monkeypatch):
     assert session.messages[-1].role_id == "assistant-user"
 
 
-async def test_add_message_rejects_unregistered_user_role_id(service, monkeypatch):
+async def test_add_message_admin_request_allows_unregistered_user_role_id(service, monkeypatch):
     manager = APIKeyManager(root_key=TEST_ROOT_KEY, viking_fs=service.viking_fs)
     await manager.load()
     account_id = "acct_session_invalid"
@@ -356,15 +360,19 @@ async def test_add_message_rejects_unregistered_user_role_id(service, monkeypatc
         role=Role.ADMIN,
     )
 
-    with pytest.raises(InvalidArgumentError, match="not a registered user"):
-        await _call_add_message_route(
-            service,
-            monkeypatch,
-            ctx=ctx,
-            payload=_message_request("user", content="hello invalid", role_id="ghost"),
-            api_key_manager=manager,
-            session_id="invalid-user-role-id",
-        )
+    response = await _call_add_message_route(
+        service,
+        monkeypatch,
+        ctx=ctx,
+        payload=_message_request("user", content="hello invalid", role_id="ghost"),
+        api_key_manager=manager,
+        session_id="invalid-user-role-id",
+    )
+
+    assert response.result["message_count"] == 1
+    session = await service.sessions.get("invalid-user-role-id", ctx, auto_create=False)
+    await session.load()
+    assert session.messages[-1].role_id == "ghost"
 
 
 async def test_add_multiple_messages(client: httpx.AsyncClient):
