@@ -300,12 +300,13 @@ async def viking_ingest(
         except ValueError:
             print(f"Warning: Failed to parse session_time: {session_time}", file=sys.stderr)
 
-    # Create client
+    # Create client with 10-minute timeout
     client = ov.AsyncHTTPClient(
         url=openviking_url,
         user=user_id,
         agent_id=agent_id,
         account=account,
+        timeout=600,
     )
     await client.initialize()
 
