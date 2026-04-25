@@ -131,7 +131,8 @@
   "enable_memory_decay": true,
   "memory_decay_check_interval": 3600,
   "memory": {
-    "version": "v1"
+    "version": "v2",
+    "extraction_enabled": true
   },
   "log": {
     "level": "INFO",
