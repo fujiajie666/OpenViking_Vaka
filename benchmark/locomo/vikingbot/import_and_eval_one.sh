@@ -200,7 +200,7 @@ if [ -n "$QUESTION_INDEX" ]; then
         if [ "$AUTO_COMMIT" = "true" ]; then
             OUTPUT_FILE=./result/locomo_${SAMPLE}_${QUESTION_INDEX}_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv
         else
-            OUTPUT_FILE=./result/locomo_${SAMPLE}_${QUESTION_INDEX}_result.csv
+            OUTPUT_FILE=./result/locomo_${SAMPLE}_${QUESTION_INDEX}_result_${TIMESTAMP}.csv
         fi
         "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" \
             "$INPUT_FILE" \
@@ -214,7 +214,7 @@ if [ -n "$QUESTION_INDEX" ]; then
         if [ "$AUTO_COMMIT" = "true" ]; then
             OUTPUT_FILE=./result/locomo_${SAMPLE}_${QUESTION_INDEX}_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv
         else
-            OUTPUT_FILE=./result/locomo_${SAMPLE}_${QUESTION_INDEX}_result.csv
+            OUTPUT_FILE=./result/locomo_${SAMPLE}_${QUESTION_INDEX}_result_${TIMESTAMP}.csv
         fi
         "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" \
             "$INPUT_FILE" \
@@ -316,7 +316,7 @@ PY
     if [ "$AUTO_COMMIT" = "true" ]; then
         OUTPUT_FILE=./result/locomo_${SAMPLE}_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv
     else
-        OUTPUT_FILE=./result/locomo_${SAMPLE}_result.csv
+        OUTPUT_FILE=./result/locomo_${SAMPLE}_result_${TIMESTAMP}.csv
     fi
     "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" \
         "$INPUT_FILE" \

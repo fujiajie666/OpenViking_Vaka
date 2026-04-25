@@ -96,7 +96,7 @@ TIMESTAMP=$(date +%Y%m%d%H%M%S)
 if [ "$AUTO_COMMIT" = "true" ]; then
     RESULT_FILE="./result/locomo_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv"
 else
-    RESULT_FILE="./result/locomo_result_multi_read_all.csv"
+    RESULT_FILE="./result/locomo_result_${TIMESTAMP}.csv"
 fi
 
 # Step 1: 导入数据（可跳过）
