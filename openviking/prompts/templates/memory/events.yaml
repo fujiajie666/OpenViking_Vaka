@@ -1,13 +1,19 @@
 memory_type: events
 description: |
   # Guidelines
-  - The summary must include information records related to the entities involved, with attention to detail, especially emphasizing commitments, agreements, or proposals that may be referenced in the future (for example: Xiaoming once asked, "Do you need me to help you get a membership?" and Xiaosen replied, "Let's talk about it later"), and nothing should be omitted. If there is a time expression (such as "yesterday"), the date must be converted to a specific year, month, and day format according to when the event occurred.
-  - Include all facts as comprehensively as possible, especially requests made by specific roles and mark major events.
-  - Convert dialogue into indirect speech, covering emotions and speaker characteristics, recording the user's emotional state, conversation content, emotional feedback (such as happy, sad, curious, etc.), and the assistant's response.
-  - Create a coherent narrative, retaining key dramatic elements.
+  - Extract ONE event per file. Each event should be small and focused on a single fact, activity, or time point.
+  - If multiple events occur, create separate event files for each - do NOT bundle them together.
+  - Examples of ONE event per file:
+    - "met up with friends" = one event
+    - "family gathering last week" = one event
+    - "mentor meeting tomorrow" = one event
+  - The summary must include information records related to the entities involved, with attention to detail, especially emphasizing:
+    - Commitments, agreements, or proposals that may be referenced in the future (for example: Xiaoming once asked, "Do you need me to help you get a membership?" and Xiaosen replied, "Let's talk about it later")
+    - Social gatherings, meetups, or activities with specific time references (e.g., "met up last week", "going to the beach tomorrow", "had lunch with friends")
+    - Any event that mentions specific times (yesterday, last week, next month, etc.) or dates
+  - If there is a time expression (such as "yesterday"), the date must be converted to a specific year, month, and day format according to when the event occurred.
+  - Keep content concise - focus on the key fact, don't add unnecessary details.
   - Use a third-person perspective.
-  - If possible, combine the user's current behavior and reactions to speculate on the user's possible thoughts or actions.
-  - Describe the complete content of an event within a single event as much as possible; do not split one event into multiple parts.
   - Record content that mentions time.
 directory: "viking://user/{{ user_space }}/memories/events"
 filename_template: "{{ extract_context.get_year(ranges) }}/{{ extract_context.get_month(ranges) }}/{{ extract_context.get_day(ranges) }}/{{ event_name }}.md"
@@ -16,7 +22,13 @@ enabled: true
 # upsert 表示新增或更新（默认行为）
 operation_mode: "add_only"
 content_template: |
-  time: {{extract_context.get_first_message_time_with_weekday_from_ranges(ranges|default(''))|default('N/A')}}
+  {% if time_references %}## Time References
+  {{ time_references }}
+  {% endif %}
+  {% if causal_relationships %}## Causal Relationships
+  {{ causal_relationships }}
+  {% endif %}
+  ## Conversation Time: {{extract_context.get_first_message_time_with_weekday_from_ranges(ranges|default(''))|default('N/A')}}
   {{ extract_context.read_message_ranges(ranges|default('')).pretty_print() if ranges else '' }}
 
 
@@ -32,18 +44,38 @@ fields:
     type: string
     description: |
       Event name in Chinese or English. If English, use lowercase with underscores, max 3 words. Do not include any dates.
+      Keep it simple and focused on one event.
     merge_op: immutable
 
   - name: goal
     type: string
     description: |
-      Summarize the purpose of the content in 5 words or less
+      Summarize the purpose of the event in 5 words or less.
 
   - name: summary
     type: string
     description: |
-      Based on the content of the above fields, compile a description to outline the complete Fact content.
+      Brief description of the event in 1-2 sentences. Focus on the key fact.
       Use specific year-month-day dates instead of vague terms such as yesterday, last week, and tomorrow.
+      Max 50 words.
+
+  - name: time_references
+    type: string
+    description: |
+      Extract ALL events that have time references from the conversation.
+      Format each as: "event_content -> absolute_date"
+      Example: "met up with friends -> 2023-08-27", "started transitioning -> 2020-08", "school event last week -> 2023-08-20"
+      Convert relative times (last week, three years ago, yesterday) to absolute dates based on the conversation timestamp.
+      If no time mentioned, leave empty.
+
+  - name: causal_relationships
+    type: string
+    description: |
+      Extract implicit causal relationships from the conversation.
+      Format each as: "cause -> effect"
+      Example: "received support -> now wants to help others", "had therapy -> became more self-aware"
+      Focus on "because of X, now Y" patterns that enable counterfactual reasoning.
+      If no causal relationships, leave empty.
 
   - name: ranges
     type: string

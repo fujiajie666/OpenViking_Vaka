@@ -1,35 +1,61 @@
 memory_type: preferences
 description: |
-  User preference memory - captures "what the user likes/dislikes or is accustomed to".
-  Extract specific preferences the user has expressed across conversations.
+  Preference and interest memory - captures "what a person likes/dislikes, is interested in, or is accustomed to".
+  Includes both behavioral preferences (code style, communication style, food, commute, etc.) and stable interests (music, art, sports, social causes, etc.).
+  Extract specific preferences/interests expressed across conversations for the user and others they mention.
   Each preference should be about a specific topic (not generic).
-  Topics can be: code style, communication style, tools, workflow, food, commute, etc.
   Store different topics as separate memory files, do NOT mix unrelated preferences.
 directory: "viking://user/{{ user_space }}/memories/preferences"
-filename_template: "{{ topic }}.md"
+filename_template: "{{ category }}/{{ topic }}.md"
 enabled: true
 
 overview_template: |-
   # Preferences Overview
   {% if items %}**User:** {{ items[0].file_content.user_id }}
-  **Topic:** {{ items[0].file_content.topic }}{% endif %}
+  **Category:** {{ items[0].file_content.category }}{% endif %}
   {% for item in items %}
   - [{{ item.file_content.topic }}](./{{ item.file_name }})
   {% endfor %}
 
 fields:
+  - name: category
+    type: string
+    description: |
+      Category for grouping related preference topics. Must be one of:
+      - lifestyle: food, commute, daily habits, pets, flowers, nature
+      - art: painting, music, literature, creative hobbies
+      - career: work style, career aspirations, professional development
+      - social: community involvement, activism, friendship, family building
+      - code_style: programming language preferences, engineering practices
+      - communication: interaction style, language preferences
+      If none fit, use the closest match.
+    merge_op: immutable
+
   - name: topic
     type: string
     description: |
       Preference topic in Chinese or English. If English, use lowercase with underscores, max 3 words.
-      Preference topic used to uniquely identify this preference memory.
-      Should be a semantic topic description such as "Python code style", "Communication style", "Food preference", "Commute preference", etc.
+      Uniquely identifies this preference memory within its category.
+      Should be a semantic topic description such as "painting", "counseling", "community_support", "cuisine", etc.
       Different preference topics should be stored as separate memories, do not mix unrelated preferences.
     merge_op: immutable
 
   - name: content
     type: string
     description: |
-      Preference content in Markdown format describing "what the user prefers/is accustomed to".
-      Example: "User has shown clear preferences for Python code style in multiple conversations: dislikes using type hints, considers them redundant; requires concise function comments, limited to 1-2 lines; prefers direct implementation, avoids excessive fallbacks and over-engineering."
+      Preference content in Markdown format. Each person gets a `# Name` section (user first, others follow).
+      Use categorized list items with polarity: `- Category: [Polarity]Entry`. Categories are not fixed; use semantic labels fitting the content (e.g. Code Style, Engineering, Cuisine, Support Approach).
+      Inferred preferences (not explicitly stated but reasonably deduced) must be tagged with `(inferred: causal chain, date)`. Write the reason as a causal chain (cause → effect), not just a trigger event. e.g. `(inferred: support groups improved my life → prefers evidence-based counseling, 20230627)`. Explicit > inferred on conflict.
+      Example:
+      ```
+      # Xiao Jiu
+      - Code Style: [-]type hints; [+]concise comments (1-2 lines); [++]direct implementation
+      - Engineering: [-]excessive fallbacks; [-]over-engineering
+
+      # Caroline
+      - Support Approach: [++]evidence-based counseling (inferred: support groups improved my life → prefers evidence-based counseling, 20230627); [+]community support engagement (inferred: received love and support → wants to pass it on, 20230609)
+
+      # Wang Fang
+      - Cuisine: [+]light flavors; [-]spicy food; [+]home-cooked meals
+      ```
     merge_op: patch

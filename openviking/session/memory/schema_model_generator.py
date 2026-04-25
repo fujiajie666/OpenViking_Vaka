@@ -82,12 +82,14 @@ class SchemaModelGenerator:
         field_definitions: Dict[str, Tuple[Type[Any], Any]] = {}
 
         # Add user_id and agent_id fields when multiple users are in scope
-        if role_scope and len(role_scope.user_ids) > 1:
+        # Skip if schema has "ranges" field (like events) - these are message-based and don't need user isolation
+        has_ranges = any(field.name == "ranges" for field in memory_type.fields)
+        if role_scope and len(role_scope.user_ids) > 1 and not has_ranges:
             field_definitions["user_id"] = (
                 str,
                 Field(..., description="User ID to distinguish which user's memory to write"),
             )
-        if role_scope and len(role_scope.agent_ids) > 1:
+        if role_scope and len(role_scope.agent_ids) > 1 and not has_ranges:
             field_definitions["agent_id"] = (
                 str,
                 Field(..., description="Agent ID to distinguish which agent's memory to write"),

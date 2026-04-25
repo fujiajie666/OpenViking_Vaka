@@ -42,15 +42,7 @@ class MemoryIsolationHandler:
         user_ids = set()
         agent_ids = set()
 
-        # 添加 ctx 中原始的 userid 和 agentid
-        if self.ctx and self.ctx.user:
-            user_id = self.ctx.user.user_id
-            agent_id = self.ctx.user.agent_id
-            if user_id:
-                user_ids.add(user_id)
-            if agent_id:
-                agent_ids.add(agent_id)
-
+        # 先从 messages 中提取 role_id
         messages = self._extract_context.messages if self._extract_context else []
         for msg in messages:
             role = msg.role
@@ -61,6 +53,15 @@ class MemoryIsolationHandler:
                 user_ids.add(role_id)
             elif role == "assistant":
                 agent_ids.add(role_id)
+
+        # 只有当 messages 中没有提取到 user_ids/agent_ids 时，才添加 ctx 中的 userid/agentid
+        if self.ctx and self.ctx.user:
+            user_id = self.ctx.user.user_id
+            agent_id = self.ctx.user.agent_id
+            if not user_ids and user_id:
+                user_ids.add(user_id)
+            if not agent_ids and agent_id:
+                agent_ids.add(agent_id)
 
         return RoleScope(
             user_ids=list(user_ids),
@@ -79,7 +80,6 @@ class MemoryIsolationHandler:
             if role_id is None:
                 return
             if role_id not in scope_ids:
-                print(f'roleid warn: {role_id}' not in {scope_ids})
                 return
             role_ids.add(role_id)
 

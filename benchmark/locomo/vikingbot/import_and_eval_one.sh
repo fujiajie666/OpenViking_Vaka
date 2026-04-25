@@ -7,11 +7,13 @@
 #   ./import_and_eval_one.sh conv-26                     # sample_id conv-26, 所有问题 (批量)
 #   ./import_and_eval_one.sh conv-26 2 --skip-import     # 跳过导入，直接评测
 #   ./import_and_eval_one.sh conv-26 --skip-import       # 跳过导入，批量评测
+#   ./import_and_eval_one.sh conv-26 2 --single-chat     # 单聊模式
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKIP_IMPORT=false
+SINGLE_CHAT=false
 
 if command -v python3 >/dev/null 2>&1; then
     PYTHON_BIN="python3"
@@ -82,26 +84,35 @@ source "$RUNTIME_ENV_FILE"
 for arg in "$@"; do
     if [ "$arg" = "--skip-import" ]; then
         SKIP_IMPORT=true
+    elif [ "$arg" = "--single-chat" ]; then
+        SINGLE_CHAT=true
     fi
 done
 
-# 过滤掉 --skip-import 获取实际参数
+# 过滤掉 --skip-import 和 --single-chat 获取实际参数
 ARGS=()
 for arg in "$@"; do
-    if [ "$arg" != "--skip-import" ]; then
+    if [ "$arg" != "--skip-import" ] && [ "$arg" != "--single-chat" ]; then
         ARGS+=("$arg")
     fi
 done
+
+# 构建通用选项
+COMMON_OPTS=()
+if [ "$SINGLE_CHAT" = "true" ]; then
+    COMMON_OPTS+=("--single-chat")
+fi
 
 SAMPLE=${ARGS[0]}
 QUESTION_INDEX=${ARGS[1]}
 INPUT_FILE="$SCRIPT_DIR/../data/locomo10.json"
 
 if [ -z "$SAMPLE" ]; then
-    echo "Usage: $0 <sample_index|sample_id> [question_index] [--skip-import]"
+    echo "Usage: $0 <sample_index|sample_id> [question_index] [--skip-import] [--single-chat]"
     echo "  sample_index: 数字索引 (0,1,2...) 或 sample_id (conv-26)"
     echo "  question_index: 问题索引 (可选)，不传则测试该 sample 的所有问题"
     echo "  --skip-import: 跳过导入步骤，直接使用已导入的数据进行评测"
+    echo "  --single-chat: 单聊模式，不设置 role_id/speaker，不传 --memory-user"
     exit 1
 fi
 
@@ -154,7 +165,8 @@ if [ -n "$QUESTION_INDEX" ]; then
             --question-index "$QUESTION_INDEX" \
             --force-ingest \
             --account "$ACCOUNT" \
-            --openviking-url "$OPENVIKING_URL"
+            --openviking-url "$OPENVIKING_URL" \
+            "${COMMON_OPTS[@]}"
 
         echo "Waiting for data processing..."
         sleep 3
@@ -173,7 +185,8 @@ if [ -n "$QUESTION_INDEX" ]; then
             "$INPUT_FILE" \
             --sample "$SAMPLE_ID_FOR_CMD" \
             --question-index "$QUESTION_INDEX" \
-            --count 1
+            --count 1 \
+            "${COMMON_OPTS[@]}"
     else
         # sample_id 模式直接更新批量结果文件
         OUTPUT_FILE=./result/locomo_${SAMPLE}_result.csv
@@ -183,7 +196,8 @@ if [ -n "$QUESTION_INDEX" ]; then
             --question-index "$QUESTION_INDEX" \
             --count 1 \
             --output "$OUTPUT_FILE" \
-            --update-mode
+            --update-mode \
+            "${COMMON_OPTS[@]}"
     fi
 
     # 运行 Judge 评分
@@ -260,7 +274,8 @@ PY
             --sample "$SAMPLE_INDEX" \
             --force-ingest \
             --account "$ACCOUNT" \
-            --openviking-url "$OPENVIKING_URL"
+            --openviking-url "$OPENVIKING_URL" \
+            "${COMMON_OPTS[@]}"
 
         echo "Waiting for data processing..."
         sleep 10
@@ -277,7 +292,8 @@ PY
         "$INPUT_FILE" \
         --sample "$SAMPLE_ID_FOR_CMD" \
         --output "$OUTPUT_FILE" \
-        --threads 5
+        --threads 5 \
+        "${COMMON_OPTS[@]}"
 
     # 运行 Judge 评分
     if [ "$SKIP_IMPORT" = "true" ]; then

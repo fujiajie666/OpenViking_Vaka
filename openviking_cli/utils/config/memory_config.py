@@ -57,6 +57,15 @@ class MemoryConfig(BaseModel):
             "When multiple directories are searched, results are merged and top-N are read."
         ),
     )
+    extraction_enabled: bool = Field(
+        default=True,
+        description=(
+            "When enabled (default), memory extraction runs on session commit "
+            "to produce long-term memories. When disabled, sessions are archived "
+            "but no memory extraction is performed. Useful for read-only or "
+            "stateless deployments."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
 

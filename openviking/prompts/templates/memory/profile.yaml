@@ -1,18 +1,9 @@
 memory_type: profile
 description: |
-  # Task Objective
-  User profile memory - captures "who the user is" as a person.
-  Extract relatively stable personal attributes that define the user's identity, work style, and preferences.
-  Include: profession, experience level, technical background, communication style, work habits, etc.
-  Do NOT include transient conversation content or temporary mood states.
-
-  # Rules
-  - Each item: self-contained, declarative sentence, < 30 words
-  - Extract only facts stated/confirmed by user; no guesses
-  - Focus on persistent information, not temporary situations
-  - Forbidden: events, only-assistant content, sensitive/private info, trivial updates
-  - Merge similar items; keep latest if conflicting 
-  
+  You are an expert at extracting stable profile characteristics from conversation history for multiple people (the user and others they mention). Record in the same language as the user's input.
+  Each person gets a separate section in the file. The user section comes first; others follow. Only record people who have substantive profile info (skip passing mentions).
+  Evidence rule: First-person statements are primary evidence; reasonable contextual inference allowed when clearly referring to a person.
+  Note: Preferences and interests (code style, food, communication style, music, art, hobbies, etc.) should go to "preferences" memory type, not here. This memory type only handles Basic Information and Emotional Needs.
 
 directory: "viking://user/{{ user_space }}/memories"
 filename_template: "profile.md"
@@ -21,21 +12,82 @@ fields:
   - name: content
     type: string
     description: |
-      User profile content in Markdown format describing "who the user is".
-      Includes relatively stable personal attributes: profession, experience, tech stack, communication style, etc.
-      Only record objective statuses, do not record events or similar information.
-      [IMPORTANT] For changeable statuses, must include the last updated time in the format: (as of 2023-06-09) 
-      Example:
-      # Caroline
-      - Date of birth
-      - Gender: Female
-      - Age: 25 (as of 2023-06-09)
-      - Nickname
-      - Place of origin
-      - Place of residence
-      - Regular city of residence
-      - Current occupation
-      - Relationship status: Single (as of 2023-06-09)
-      - Career plan
-      etc.
+      ## Output Rules
+      1. Strict whitelist for Basic Information and Emotional Needs fields; no extra fields. Preferences and interests (code style, food, music, art, hobbies, etc.) → use "preferences" memory type.
+      2. Omit empty fields entirely.
+      3. Each person gets a `# Name` section. The user comes first; others (family, friends, etc.) follow if they have substantive info.
+      4. Merging: De-duplicate overlapping content; for contradictory entries, prefer the latest. Remove any Basic Information field not in the schema; convert semantically similar content to the nearest schema field.
+      5. Keep only stable traits (basic info, long-term emotional patterns); exclude one-off requests (e.g., "check weather/recommend a restaurant"). All relative time expressions (e.g., "4 years ago", "last month") must be converted to absolute dates based on the conversation timestamp.
+      6. Record needs as high-level concepts (e.g., "travel planning advice"), not specific one-off tasks.
+      7. Polarity conflict: same entry with opposing polarity → keep the most recent expression; if indeterminate, keep the stronger polarity ([+++] > [++] > [+]); if still undecidable, exclude.
+
+      ## Profile Schema
+      ### Basic Information
+      - Birthday: MM/DD format.
+      - Gender: MUST be "male" or "female". Normalize synonyms; infer from spouse terms ("my wife"→male, "my husband"→female). Do NOT infer from how others address the user; prefer latest on conflict.
+      - Age: User's age.
+      - Nickname: How others/the assistant address the user. Prefer latest on conflict; do not record others' names.
+      - Hometown: User's birthplace.
+      - Residence: Where the user lives, down to street/building if available.
+      - Permanent City: City of residence.
+      - Occupation: Current actual job (3-5 chars). "dream/aspire/preparing" → Career Plan instead. Current identity (student/intern) → Occupation.
+      - Education: Educational background.
+      - Relationship Status: married, single, in a relationship, etc.
+      - Career Plan: Career goal/aspiration (dream/aspire/plan to). Conflicts: prefer latest.
+
+      ### Emotional Needs (with polarity)
+      - Emotional Support: Comforting, talking, psychological counseling.
+      - Companionship Need: Virtual companionship, shared time.
+      - Emotional Communication: Sharing emotional status (love, friendship, family).
+      - Personal Growth: Emotional management, self-exploration, growth motivation.
+      - Social Interaction: Belonging, being recognized.
+      - Entertainment and Relaxation: Passing time, easy humor.
+      - Life Advice: Life guidance, decision support.
+      - Interpersonal Relationship Help: Resolving conflicts, social skills.
+
+      ## Output Format (Markdown)
+      ```
+      # Person A
+      ## Basic Information
+      - Category: Description
+
+      ## Emotional Needs
+      - Category: [Polarity]Entry 1; [Polarity]Entry 2
+
+      # Person B
+      ## Basic Information
+      - Category: Description
+
+      ## Emotional Needs
+      - Category: [Polarity]Entry 1; [Polarity]Entry 2
+      ```
+
+      ## Examples
+      ### Correct
+      ```
+      # Xiao Jiu
+      ## Basic Information
+      - Nickname: Xiao Jiu
+      - Age: 20 years old
+      - Relationship Status: In a relationship
+
+      ## Emotional Needs
+      - Life Advice: [++]how to spend the weekend
+      - Emotional Support: [-]giving her advice when she is sad; [+]listening to her talk when she is sad
+
+      # Wang Fang
+      ## Basic Information
+      - Relationship: Xiao Jiu's mother
+      ```
+
+      ### Incorrect (avoid)
+      ```
+      # Xiao Lin
+      ## Basic Information
+      - Art Preference: likes abstract painting  ← Illegal field (belongs in preferences)
+
+      ## Emotional Needs
+      - Life Advice:  ← Empty field appeared
+      - Music: [+]pop  ← Wrong section (belongs in preferences)
+      ```
     merge_op: patch

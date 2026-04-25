@@ -43,24 +43,33 @@ class MemoryStore:
             return ""
 
         # Filter by min_score and sort by score descending
+        def get_score(m):
+            return m.get('score', 0) if isinstance(m, dict) else getattr(m, 'score', 0.0)
+        def get_uri(m):
+            return m.get('uri', '') if isinstance(m, dict) else getattr(m, 'uri', '')
+        def get_abstract(m):
+            return m.get('abstract', '') if isinstance(m, dict) else getattr(m, 'abstract', '')
+
         filtered_memories = [
-            memory for memory in result if getattr(memory, "score", 0.0) >= min_score
+            memory for memory in result if get_score(memory) >= min_score
         ]
-        filtered_memories.sort(key=lambda m: getattr(m, "score", 0.0), reverse=True)
+        filtered_memories.sort(key=get_score, reverse=True)
 
         user_memories = []
         total_chars = 0
+        seen_content_hashes = set()
 
         for idx, memory in enumerate(filtered_memories, start=1):
-            uri = getattr(memory, "uri", "")
-            abstract = getattr(memory, "abstract", "")
-            score = getattr(memory, "score", 0.0)
+            uri = get_uri(memory)
+            abstract = get_abstract(memory)
+            score = get_score(memory)
 
             # First, try to build full memory with content
+            content = ""
             try:
                 content = await client.read_content(uri, level="read")
-            except Exception:
-                content = ""
+            except Exception as e:
+                logger.warning(f"Failed to read content from {uri}: {e}")
 
             if content:
                 # Try full version first (no abstract when content is present)
@@ -73,12 +82,21 @@ class MemoryStore:
                 )
             else:
                 # No content available, use link-only version
+                logger.info(f"Using link-only for {uri} (read failed or empty)")
                 memory_str = (
                     f'<memory index="{idx}" type="link">\n'
                     f"  <uri>{uri}</uri>\n"
                     f"  <score>{score}</score>\n"
                     f"</memory>"
                 )
+
+            # Deduplicate by content hash (use content or abstract as key)
+            content_to_hash = content or abstract
+            content_hash = hash(content_to_hash)
+            if content_to_hash and content_hash in seen_content_hashes:
+                continue
+            if content_to_hash:
+                seen_content_hashes.add(content_hash)
 
             # Check if adding this memory would exceed the limit
             memory_chars = len(memory_str)
@@ -121,18 +139,19 @@ class MemoryStore:
         return f"## Long-term Memory\n{long_term}" if long_term else ""
 
     async def get_viking_memory_context(
-        self, current_message: str, workspace_id: str, sender_id: str
+        self, current_message: str, workspace_id: str, sender_id: str, user_ids: list[str] | None = None
     ) -> str:
         try:
             config = load_config().ov_server
             admin_user_id = config.admin_user_id
-            user_id = sender_id
+            # Use provided user_ids or fall back to sender_id
+            search_user_ids = user_ids if user_ids else [sender_id]
             logger.info(f'workspace_id={workspace_id}')
-            logger.info(f'user_id={user_id}')
+            logger.info(f'user_ids={search_user_ids}')
             logger.info(f'admin_user_id={admin_user_id}')
             client = await VikingClient.create(agent_id=workspace_id)
             result = await client.search_memory(
-                query=current_message, user_id=user_id, agent_user_id=admin_user_id, limit=30
+                query=current_message, user_ids=search_user_ids, agent_user_id=admin_user_id, limit=30
             )
             if not result:
                 return ""
@@ -142,10 +161,14 @@ class MemoryStore:
             memory_list.append(f'user_memory[{len(result['user_memory'])}]:')
 
             for i, mem in enumerate(result['user_memory']):
-                memory_list.append(f"{i},{getattr(mem, 'uri', '')},{getattr(mem, 'score', 0)}")
+                uri = mem.get('uri', '') if isinstance(mem, dict) else getattr(mem, 'uri', '')
+                score = mem.get('score', 0) if isinstance(mem, dict) else getattr(mem, 'score', 0)
+                memory_list.append(f"{i},{uri},{score}")
             memory_list.append(f'agent_memory[{len(result['agent_memory'])}]:')
             for i, mem in enumerate(result['agent_memory']):
-                memory_list.append(f"{i},{getattr(mem, 'uri', '')},{getattr(mem, 'score', 0)}")
+                uri = mem.get('uri', '') if isinstance(mem, dict) else getattr(mem, 'uri', '')
+                score = mem.get('score', 0) if isinstance(mem, dict) else getattr(mem, 'score', 0)
+                memory_list.append(f"{i},{uri},{score}")
             logger.info(f"[RAW_MEMORIES]\n{'\n'.join(memory_list)}")
             user_memory = await self._parse_viking_memory(result["user_memory"], client, min_score=0.35)
             agent_memory = await self._parse_viking_memory(result["agent_memory"], client, min_score=0.35, max_chars=2000)
