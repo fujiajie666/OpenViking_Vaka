@@ -15,7 +15,6 @@ except ImportError:
     def load_dotenv(*args, **kwargs) -> bool:
         return False
 
-
 try:
     from openai import AsyncOpenAI
 except ImportError:
@@ -233,7 +232,7 @@ async def main() -> None:
     )
     parser.add_argument(
         "--model",
-        default="doubao-seed-2-0-pro-260215",
+        default="ep-20260423162207-qfqr8",
         help="Judge model name, default: doubao-seed-2-0-pro-260215",
     )
     parser.add_argument(

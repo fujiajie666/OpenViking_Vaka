@@ -16,6 +16,7 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 SKIP_IMPORT=false
 SKIP_PREPARE=false
 SKIP_JUDGE=false
+JUDGE_INPUT_FILE="/data/vaka_judge.csv"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -98,10 +99,8 @@ fi
 
 if [[ "$SKIP_PREPARE" != "true" ]]; then
     echo "[2/4] Preparing Vaka eval rows..."
-    "${PYTHON_CMD[@]}" "$SCRIPT_DIR/run_eval.py" "$INPUT_FILE" \
+    "${PYTHON_CMD[@]}" "$SCRIPT_DIR/run_eval.py" "$JUDGE_INPUT_FILE" \
         --output "$OUTPUT_FILE" \
-        --memory-sessions "$MEMORY_SESSIONS" \
-        --eval-sessions "$EVAL_SESSIONS"
 else
     echo "[2/4] Skipping prepare..."
 fi

@@ -23,6 +23,7 @@ from vaka_utils import (
     select_cases,
 )
 
+
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DEFAULT_RESULT_DIR = SCRIPT_DIR / "result"
 DEFAULT_SUCCESS_CSV = str(DEFAULT_RESULT_DIR / "import_success.csv")
@@ -185,7 +186,7 @@ def is_already_ingested(
     account: str | None,
     user_id: str | None,
     agent_id: str | None,
-    global_session_id: int,
+    global_session_id: int | str,
     record: dict[str, Any],
     success_keys: set[str],
 ) -> bool:
@@ -202,7 +203,7 @@ def mark_ingested(
     account: str | None,
     user_id: str | None,
     agent_id: str | None,
-    global_session_id: int,
+    global_session_id: int | str,
     record: dict[str, Any],
     meta: dict[str, Any],
 ) -> None:
@@ -304,6 +305,39 @@ def build_case_sessions(
             }
         )
     return sessions
+
+
+def build_merged_case_session(
+    case: dict[str, Any],
+    *,
+    memory_sessions: set[int],
+    answer_column: str,
+    keep_references: bool,
+) -> dict[str, Any] | None:
+    filtered_rows = [
+        row for row in case["rows"] if row["_global_session_id"] in memory_sessions
+    ]
+    if not filtered_rows:
+        return None
+    filtered_rows = sorted(filtered_rows, key=lambda r: r["_row_index"])
+    messages = build_session_messages(
+        filtered_rows, answer_column=answer_column, keep_references=keep_references
+    )
+    if not messages:
+        return None
+    used_doc_values = {row.get("used_doc") or row.get("doc_base") or "" for row in filtered_rows}
+    used_docs = sorted(doc for doc in used_doc_values if doc)
+    return {
+        "messages": messages,
+        "meta": {
+            "case_id": case["case_id"],
+            "case_session_range": case["session_range"],
+            "global_session_id": case["session_range"],
+            "local_session_id": "all",
+            "row_count": len(filtered_rows),
+            "used_docs": used_docs,
+        },
+    }
 
 
 async def viking_ingest(
@@ -457,12 +491,21 @@ async def run_import(args: argparse.Namespace) -> None:
             f"\n=== {case['case_id']} (global sessions {case['session_range']}) ===",
             file=sys.stderr,
         )
-        sessions = build_case_sessions(
-            case,
-            memory_sessions=memory_sessions,
-            answer_column=args.answer_column,
-            keep_references=args.keep_references,
-        )
+        if args.ingest_mode == "case":
+            merged = build_merged_case_session(
+                case,
+                memory_sessions=memory_sessions,
+                answer_column=args.answer_column,
+                keep_references=args.keep_references,
+            )
+            sessions = [merged] if merged is not None else []
+        else:
+            sessions = build_case_sessions(
+                case,
+                memory_sessions=memory_sessions,
+                answer_column=args.answer_column,
+                keep_references=args.keep_references,
+            )
         print(f"    {len(sessions)} memory session(s) to import", file=sys.stderr)
         print(
             f"    target user={_identity_part(user_id)} agent={_identity_part(agent_id)}",
@@ -552,6 +595,16 @@ def main() -> None:
         "--keep-references",
         action="store_true",
         help="Keep Vaka <reference> tags in imported assistant answers",
+    )
+    parser.add_argument(
+        "--ingest-mode",
+        choices=["session", "case"],
+        default="session",
+        help=(
+            "Granularity for memory ingestion. "
+            "'session' (default): one OpenViking session per global_session_id. "
+            "'case': all filtered sessions within a case merged into a single OpenViking session."
+        ),
     )
     parser.add_argument(
         "--openviking-url",
