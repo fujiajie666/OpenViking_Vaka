@@ -117,7 +117,7 @@
     },
     "recallMaxContentChars": {
       "label": "Recall Max Content Chars",
-      "placeholder": "500",
+      "placeholder": "5000",
       "advanced": true,
       "help": "Maximum characters per memory content in auto-recall injection"
     },
@@ -128,7 +128,7 @@
     },
     "recallTokenBudget": {
       "label": "Recall Token Budget",
-      "placeholder": "2000",
+      "placeholder": "8000",
       "advanced": true,
       "help": "Maximum estimated tokens for auto-recall memory injection"
     },

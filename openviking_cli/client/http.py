@@ -16,7 +16,9 @@ import httpx
 from openviking.telemetry import TelemetryRequest, normalize_telemetry_request
 from openviking_cli.client.base import BaseClient
 from openviking_cli.exceptions import (
+    AbortedError,
     AlreadyExistsError,
+    ConflictError,
     DeadlineExceededError,
     EmbeddingFailedError,
     FailedPreconditionError,
@@ -28,9 +30,11 @@ from openviking_cli.exceptions import (
     OpenVikingError,
     PermissionDeniedError,
     ProcessingError,
+    ResourceExhaustedError,
     SessionExpiredError,
     UnauthenticatedError,
     UnavailableError,
+    UnimplementedError,
     VLMFailedError,
 )
 from openviking_cli.retrieve.types import FindResult
@@ -45,17 +49,22 @@ ERROR_CODE_TO_EXCEPTION = {
     "INVALID_URI": InvalidURIError,
     "NOT_FOUND": NotFoundError,
     "ALREADY_EXISTS": AlreadyExistsError,
+    "CONFLICT": ConflictError,
     "FAILED_PRECONDITION": FailedPreconditionError,
+    "ABORTED": AbortedError,
     "UNAUTHENTICATED": UnauthenticatedError,
     "PERMISSION_DENIED": PermissionDeniedError,
+    "RESOURCE_EXHAUSTED": ResourceExhaustedError,
     "UNAVAILABLE": UnavailableError,
     "INTERNAL": InternalError,
     "DEADLINE_EXCEEDED": DeadlineExceededError,
+    "UNIMPLEMENTED": UnimplementedError,
     "NOT_INITIALIZED": NotInitializedError,
     "PROCESSING_ERROR": ProcessingError,
     "EMBEDDING_FAILED": EmbeddingFailedError,
     "VLM_FAILED": VLMFailedError,
     "SESSION_EXPIRED": SessionExpiredError,
+    "UNKNOWN": OpenVikingError,
 }
 
 
@@ -134,6 +143,7 @@ class AsyncHTTPClient(BaseClient):
         account: Optional[str] = None,
         user: Optional[str] = None,
         timeout: float = 60.0,
+        extra_headers: Optional[Dict[str, str]] = None,
     ):
         """Initialize AsyncHTTPClient.
 
@@ -147,6 +157,7 @@ class AsyncHTTPClient(BaseClient):
             user: User identifier for multi-tenant auth. Required when using root key
                   to access tenant-scoped APIs. If not provided, reads from ovcli.conf.
             timeout: HTTP request timeout in seconds. Default 60.0.
+            extra_headers: Additional HTTP headers to send with requests. If not provided, reads from ovcli.conf.
         """
         should_load_cli_config = (
             url is None
@@ -155,6 +166,7 @@ class AsyncHTTPClient(BaseClient):
             or account is None
             or user is None
             or timeout == 60.0
+            or extra_headers is None
         )
         if should_load_cli_config:
             cli_config = load_ovcli_config()
@@ -166,6 +178,8 @@ class AsyncHTTPClient(BaseClient):
                 user = user or cli_config.user
                 if timeout == 60.0:  # only override default with config value
                     timeout = cli_config.timeout
+                if extra_headers is None:
+                    extra_headers = cli_config.extra_headers
         if not url:
             raise ValueError(
                 "url is required. Pass it explicitly or configure in "
@@ -178,6 +192,7 @@ class AsyncHTTPClient(BaseClient):
         self._user_id = user
         self._user = UserIdentifier.the_default_user()
         self._timeout = timeout
+        self._extra_headers = extra_headers
         self._http: Optional[httpx.AsyncClient] = None
         self._observer: Optional[_HTTPObserver] = None
 
@@ -194,6 +209,8 @@ class AsyncHTTPClient(BaseClient):
             headers["X-OpenViking-Account"] = self._account
         if self._user_id:
             headers["X-OpenViking-User"] = self._user_id
+        if self._extra_headers:
+            headers.update(self._extra_headers)
         self._http = httpx.AsyncClient(
             base_url=self._url,
             headers=headers,
@@ -267,7 +284,15 @@ class AsyncHTTPClient(BaseClient):
         exc_class = ERROR_CODE_TO_EXCEPTION.get(code, OpenVikingError)
 
         # Handle different exception constructors
-        if exc_class in (InvalidArgumentError,):
+        if exc_class == OpenVikingError:
+            raise exc_class(message, code=code, details=details)
+        elif exc_class in (
+            InvalidArgumentError,
+            FailedPreconditionError,
+            ResourceExhaustedError,
+            AbortedError,
+            UnimplementedError,
+        ):
             raise exc_class(message, details=details)
         elif exc_class == InvalidURIError:
             uri = details.get("uri", "") if details else ""

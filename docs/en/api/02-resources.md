@@ -16,7 +16,7 @@ Resources are external knowledge that agents can reference. This guide covers ho
 | Video | `.mp4`, `.mov`, `.avi` | Frame extraction + VLM |
 | Audio | `.mp3`, `.wav`, `.m4a` | Transcription |
 | Documents | `.docx` | Text extraction |
-| Feishu/Lark | URL (`*.feishu.cn`, `*.larksuite.com`) | Cloud document parsing via `lark-oapi` |
+| Feishu/Lark | URL (`*.feishu.cn`, `*.larksuite.com`, `*.larkoffice.com`) | Cloud document parsing via `lark-oapi` |
 
 ## Processing Pipeline
 
