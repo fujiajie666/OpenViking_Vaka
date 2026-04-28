@@ -345,19 +345,13 @@ class MemoryUpdater:
             dirs[dir_path] = file_content.memory_fields.get("memory_type", "unknown")
 
         for dir, memory_type in dirs.items():
-            logger.info(
-                f"[apply_operations] Generating overview for {memory_type} at {dir}"
-            )
+            logger.info(f"[apply_operations] Generating overview for {memory_type} at {dir}")
             await self.generate_overview(memory_type, dir, ctx, extract_context)
 
         return result
 
-
     async def _apply_upsert(
-        self,
-        resolved_op: ResolvedOperation,
-        ctx: RequestContext,
-        extract_context: Any = None
+        self, resolved_op: ResolvedOperation, ctx: RequestContext, extract_context: Any = None
     ):
         """Apply edit operation from a flat model.
 
@@ -381,7 +375,9 @@ class MemoryUpdater:
                     if field.name == "content":
                         current_value = resolved_op.old_memory_file_content.plain_content
                     else:
-                        current_value = resolved_op.old_memory_file_content.memory_fields.get(field.name)
+                        current_value = resolved_op.old_memory_file_content.memory_fields.get(
+                            field.name
+                        )
                 # Use merge_op to process field value
                 merge_op = MergeOpFactory.from_field(field)
                 new_value = merge_op.apply(current_value, patch_value)
@@ -397,7 +393,7 @@ class MemoryUpdater:
             await viking_fs.write_file(uri, new_full_content, ctx=ctx)
 
         # Extract after plain content for memory_diff
-        after_plain_content, _ = deserialize_full(new_full_content)
+        after_plain_content = deserialize_full(new_full_content).plain_content
         return file_existed, before_plain_content, after_plain_content
 
     async def _apply_delete(self, uri: str, ctx: RequestContext) -> str:
@@ -412,7 +408,7 @@ class MemoryUpdater:
         deleted_plain_content = ""
         try:
             raw_content = await viking_fs.read_file(uri, ctx=ctx) or ""
-            deleted_plain_content, _ = deserialize_full(raw_content)
+            deleted_plain_content = deserialize_full(raw_content).plain_content
         except NotFoundError:
             pass
         except Exception:
@@ -425,7 +421,6 @@ class MemoryUpdater:
         except NotFoundError:
             tracer.error(f"Memory not found for delete: {uri}")
             # Idempotent - deleting non-existent file succeeds
-
 
     async def _vectorize_memories(
         self,
@@ -515,8 +510,6 @@ class MemoryUpdater:
         """
         from openviking.session.memory.utils.messages import parse_memory_file_with_fields
 
-
-
         # Get the schema for this memory type
         registry = self._registry
         schema = registry.get(memory_type)
@@ -571,7 +564,6 @@ class MemoryUpdater:
                 content = await viking_fs.read_file(file_path, ctx=ctx)
                 parsed = parse_memory_file_with_fields(content)
 
-
                 # Extract filename from path
                 filename = file_path.split("/")[-1]
 
@@ -585,16 +577,17 @@ class MemoryUpdater:
                 logger.warning(f"Failed to parse {file_path}: {e}")
                 continue
 
-
         if not items:
             logger.debug(f"No valid memory files parsed in {directory}")
             return
 
         # Render the template
         try:
-            rendered = render_template(schema.overview_template,{
+            rendered = render_template(
+                schema.overview_template,
+                {
                     "memory_type": memory_type,
-                    "items" : items,
+                    "items": items,
                 },
                 extract_context=extract_context,
             )

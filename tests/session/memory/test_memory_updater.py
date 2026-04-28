@@ -243,11 +243,11 @@ Line 4"""
 
         # Verify
         assert written_content is not None
-        body_content, metadata = deserialize_full(written_content)
-        assert "Line 1" in body_content
-        assert "Line 2 modified" in body_content
-        assert "Line 3 modified" in body_content
-        assert "Line 4" in body_content
+        result = deserialize_full(written_content)
+        assert "Line 1" in result.plain_content
+        assert "Line 2 modified" in result.plain_content
+        assert "Line 3 modified" in result.plain_content
+        assert "Line 4" in result.plain_content
 
     @pytest.mark.asyncio
     async def test_apply_edit_with_str_patch_dict(self):
@@ -275,11 +275,7 @@ Goodbye"""
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
 
         # StrPatch as dict (this is what JSON parsing gives us)
-        patch_dict = {
-            "blocks": [
-                {"search": "This is a test", "replace": "This has been modified"}
-            ]
-        }
+        patch_dict = {"blocks": [{"search": "This is a test", "replace": "This has been modified"}]}
 
         # Mock request context
         mock_ctx = MagicMock()
@@ -289,10 +285,10 @@ Goodbye"""
 
         # Verify
         assert written_content is not None
-        body_content, metadata = deserialize_full(written_content)
-        assert "Hello world" in body_content
-        assert "This has been modified" in body_content
-        assert "Goodbye" in body_content
+        result = deserialize_full(written_content)
+        assert "Hello world" in result.plain_content
+        assert "This has been modified" in result.plain_content
+        assert "Goodbye" in result.plain_content
 
     @pytest.mark.asyncio
     async def test_apply_edit_with_simple_string_replacement(self):
@@ -328,5 +324,5 @@ Goodbye"""
 
         # Verify
         assert written_content is not None
-        body_content, metadata = deserialize_full(written_content)
-        assert body_content == new_content
+        result = deserialize_full(written_content)
+        assert result.plain_content == new_content

@@ -66,6 +66,7 @@ class MemoryTypeSchema(BaseModel):
     def filename_has_variables(self):
         return "{{" in self.filename_template and "}}" in self.filename_template
 
+
 class MemoryData(BaseModel):
     """Dynamic memory data."""
 
@@ -89,9 +90,8 @@ class MemoryData(BaseModel):
         self.fields[field_name] = value
 
 
-
 class MemoryFileContent(BaseModel):
-    uri: str
+    uri: Optional[str] = None
     plain_content: str
     memory_fields: Dict
 
