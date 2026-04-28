@@ -9,6 +9,7 @@ Handles skill parsing, LLM generation, and storage operations.
 import tempfile
 import time
 import zipfile
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -16,6 +17,10 @@ from openviking.core.context import Context, ContextType, Vectorize
 from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
 from openviking.core.namespace import agent_space_fragment, canonical_agent_root
 from openviking.core.skill_loader import SkillLoader
+from openviking.privacy import (
+    UserPrivacyConfigService,
+    extract_skill_privacy_values,
+)
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import deny_direct_local_skill_input
 from openviking.storage import VikingDBManager
@@ -42,9 +47,14 @@ class SkillProcessor:
     5. Index to vector store
     """
 
-    def __init__(self, vikingdb: VikingDBManager):
+    def __init__(
+        self,
+        vikingdb: VikingDBManager,
+        privacy_config_service: Optional[UserPrivacyConfigService] = None,
+    ):
         """Initialize skill processor."""
         self.vikingdb = vikingdb
+        self._privacy_config_service = privacy_config_service
 
     async def process_skill(
         self,
@@ -79,6 +89,8 @@ class SkillProcessor:
         telemetry.set(
             "skill.parse.duration_ms", round((time.perf_counter() - parse_start) * 1000, 3)
         )
+
+        skill_dict = await self._sanitize_skill_privacy(skill_dict, ctx)
 
         context = Context(
             uri=f"{canonical_agent_root(ctx)}/skills/{skill_dict['name']}",
@@ -197,6 +209,33 @@ class SkillProcessor:
             raise ValueError(f"Unsupported data type: {type(data)}")
 
         return skill_dict, auxiliary_files, base_path
+
+    async def _sanitize_skill_privacy(
+        self, skill_dict: Dict[str, Any], ctx: RequestContext
+    ) -> Dict[str, Any]:
+        if not self._privacy_config_service:
+            return skill_dict
+
+        content = skill_dict.get("content", "")
+        extraction_result = await extract_skill_privacy_values(
+            skill_name=skill_dict.get("name", ""),
+            skill_description=skill_dict.get("description", ""),
+            content=content,
+        )
+        if not extraction_result.values:
+            return skill_dict
+
+        sanitized = deepcopy(skill_dict)
+        sanitized["content"] = extraction_result.sanitized_content
+        await self._privacy_config_service.upsert(
+            ctx=ctx,
+            category="skill",
+            target_key=sanitized["name"],
+            values=extraction_result.values,
+            updated_by=ctx.user.user_id,
+            change_reason="auto-extracted from add_skill",
+        )
+        return sanitized
 
     async def _generate_overview(self, skill_dict: Dict[str, Any], config) -> str:
         """Generate L1 overview using VLM."""

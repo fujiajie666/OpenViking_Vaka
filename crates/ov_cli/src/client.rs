@@ -1032,6 +1032,75 @@ impl HttpClient {
 
         Ok(count)
     }
+
+    // ============ Privacy Config Methods ============
+
+    pub async fn privacy_list_categories(&self) -> Result<serde_json::Value> {
+        self.get("/api/v1/privacy-configs", &[]).await
+    }
+
+    pub async fn privacy_list_targets(&self, category: &str) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/privacy-configs/{}", category);
+        self.get(&path, &[]).await
+    }
+
+    pub async fn privacy_get_current(
+        &self,
+        category: &str,
+        target_key: &str,
+    ) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/privacy-configs/{}/{}", category, target_key);
+        self.get(&path, &[]).await
+    }
+
+    pub async fn privacy_upsert(
+        &self,
+        category: &str,
+        target_key: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/privacy-configs/{}/{}", category, target_key);
+        self.post(&path, body).await
+    }
+
+    pub async fn privacy_list_versions(
+        &self,
+        category: &str,
+        target_key: &str,
+    ) -> Result<serde_json::Value> {
+        let path = format!(
+            "/api/v1/privacy-configs/{}/{}/versions",
+            category, target_key
+        );
+        self.get(&path, &[]).await
+    }
+
+    pub async fn privacy_get_version(
+        &self,
+        category: &str,
+        target_key: &str,
+        version: i32,
+    ) -> Result<serde_json::Value> {
+        let path = format!(
+            "/api/v1/privacy-configs/{}/{}/versions/{}",
+            category, target_key, version
+        );
+        self.get(&path, &[]).await
+    }
+
+    pub async fn privacy_activate(
+        &self,
+        category: &str,
+        target_key: &str,
+        version: i32,
+    ) -> Result<serde_json::Value> {
+        let path = format!(
+            "/api/v1/privacy-configs/{}/{}/activate",
+            category, target_key
+        );
+        let body = serde_json::json!({ "version": version });
+        self.post(&path, &body).await
+    }
 }
 
 #[cfg(test)]

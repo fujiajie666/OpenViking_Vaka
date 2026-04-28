@@ -369,6 +369,18 @@ openviking -o json ls viking://resources/
 | POST | `/api/v1/sessions/{id}/used` | 记录实际使用的上下文 / 技能 |
 | GET | `/api/v1/sessions/{id}/archives/{archive_id}` | 获取特定会话归档 |
 
+### 隐私配置
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/privacy-configs` | 列出隐私配置分类 |
+| GET | `/api/v1/privacy-configs/{category}` | 列出分类下目标 |
+| GET | `/api/v1/privacy-configs/{category}/{target_key}` | 获取当前生效配置（meta + current） |
+| POST | `/api/v1/privacy-configs/{category}/{target_key}` | 写入新版本并激活 |
+| GET | `/api/v1/privacy-configs/{category}/{target_key}/versions` | 列出版本号 |
+| GET | `/api/v1/privacy-configs/{category}/{target_key}/versions/{version}` | 获取指定版本详情 |
+| POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | 激活指定版本 |
+
 ### 任务
 
 | 方法 | 路径 | 说明 |
@@ -416,5 +428,6 @@ openviking -o json ls viking://resources/
 - [会话管理](05-sessions.md) - 会话管理
 - [技能](04-skills.md) - 技能管理
 - [系统](07-system.md) - 系统和监控 API
+- [隐私配置](10-privacy.md) - 隐私配置版本管理与切换
 - [指标与 Metrics](09-metrics.md) - Prometheus 指标导出与抓取说明
 - [管理员](08-admin.md) - 多租户管理 API

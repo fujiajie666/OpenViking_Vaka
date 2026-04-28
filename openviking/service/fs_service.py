@@ -9,6 +9,7 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 from typing import Any, Dict, List, Optional
 
 from openviking.core.directories import get_context_type_for_uri
+from openviking.privacy import UserPrivacyConfigService, get_skill_name_from_uri, restore_skill_content
 from openviking.core.uri_validation import validate_optional_viking_uri, validate_viking_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.content_write import ContentWriteCoordinator
@@ -23,12 +24,22 @@ logger = get_logger(__name__)
 class FSService:
     """File system operations service."""
 
-    def __init__(self, viking_fs: Optional[VikingFS] = None):
+    def __init__(
+        self,
+        viking_fs: Optional[VikingFS] = None,
+        privacy_config_service: Optional[UserPrivacyConfigService] = None,
+    ):
         self._viking_fs = viking_fs
+        self._privacy_config_service = privacy_config_service
 
-    def set_viking_fs(self, viking_fs: VikingFS) -> None:
-        """Set VikingFS instance (for deferred initialization)."""
+    def set_dependencies(
+        self,
+        viking_fs: VikingFS,
+        privacy_config_service: Optional[UserPrivacyConfigService] = None,
+    ) -> None:
+        """Set service dependencies (for deferred initialization)."""
         self._viking_fs = viking_fs
+        self._privacy_config_service = privacy_config_service
 
     def _ensure_initialized(self) -> VikingFS:
         """Ensure VikingFS is initialized."""
@@ -188,7 +199,22 @@ class FSService:
         """Read file content."""
         viking_fs = self._ensure_initialized()
         uri = validate_viking_uri(uri)
-        return await viking_fs.read_file(uri, offset=offset, limit=limit, ctx=ctx)
+        content = await viking_fs.read_file(uri, ctx=ctx)
+        skill_name = get_skill_name_from_uri(uri)
+        if skill_name and self._privacy_config_service:
+            current = await self._privacy_config_service.get_current(
+                ctx=ctx,
+                category="skill",
+                target_key=skill_name,
+            )
+            if current:
+                content = restore_skill_content(content, skill_name, current.values)
+
+        if offset == 0 and limit == -1:
+            return content
+        lines = content.splitlines(keepends=True)
+        sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
+        return "".join(sliced)
 
     async def abstract(self, uri: str, ctx: RequestContext) -> str:
         """Read L0 abstract (.abstract.md)."""

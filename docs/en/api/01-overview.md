@@ -372,6 +372,18 @@ Compact JSON with status wrapper (when `--compact` is true, which is the default
 | POST | `/api/v1/sessions/{id}/used` | Record contexts / skills actually used |
 | GET | `/api/v1/sessions/{id}/archives/{archive_id}` | Get a specific session archive |
 
+### Privacy Configs
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/privacy-configs` | List privacy config categories |
+| GET | `/api/v1/privacy-configs/{category}` | List targets under a category |
+| GET | `/api/v1/privacy-configs/{category}/{target_key}` | Get active config (`meta + current`) |
+| POST | `/api/v1/privacy-configs/{category}/{target_key}` | Upsert and activate |
+| GET | `/api/v1/privacy-configs/{category}/{target_key}/versions` | List version numbers |
+| GET | `/api/v1/privacy-configs/{category}/{target_key}/versions/{version}` | Get version snapshot |
+| POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | Activate a version |
+
 ### Tasks
 
 | Method | Path | Description |
@@ -419,5 +431,6 @@ Compact JSON with status wrapper (when `--compact` is true, which is the default
 - [Sessions](05-sessions.md) - Session management
 - [Skills](04-skills.md) - Skill management
 - [System](07-system.md) - System and monitoring API
+- [Privacy Configs](10-privacy.md) - Privacy config version management and activation
 - [Metrics](09-metrics.md) - Prometheus metrics export and scraping guide
 - [Admin](08-admin.md) - Multi-tenant management API
