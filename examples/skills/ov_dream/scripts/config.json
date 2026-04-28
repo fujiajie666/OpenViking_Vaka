@@ -1,7 +1,0 @@
-{
-  "ov_base_url": "http://127.0.0.1:1933",
-  "commit_threshold": 2000,
-  "target_uri": "viking://user/dreams/",
-  "sync_interval": 600,
-  "adapter": "openclaw"
-}
