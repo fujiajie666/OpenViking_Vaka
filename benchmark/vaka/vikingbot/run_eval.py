@@ -115,6 +115,7 @@ async def process_single_qa(
 ) -> dict:
     """处理单个 QA：调用 /bot/v1/chat 生成回答"""
     question = qa_item["question"]
+    question += "\n请尽量简短作答，只回答与问题直接相关的内容，不要展开无关信息，但确保不遗漏问题要求的关键信息。"
     standard_answer = qa_item.get("standard_answer", "")
     print(f"Processing {idx}/{total_count}: {question[:60]}...")
 
@@ -135,7 +136,6 @@ async def process_single_qa(
         "question": question,
         "standard_answer": standard_answer,
         "response": response,
-        "response_without_ref": response,
         "time_cost": round(time_cost, 2),
         "result": "",
         "reasoning": "",

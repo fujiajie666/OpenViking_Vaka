@@ -249,18 +249,25 @@ def build_session_messages(
     *,
     answer_column: str,
     keep_references: bool,
-) -> list[dict[str, str]]:
-    messages: list[dict[str, str]] = []
+) -> list[dict[str, str | None]]:
+    messages: list[dict[str, str | None]] = []
     for row in rows:
+        created_at = (row.get("created_at") or "").strip() or None
         query = (row.get("query") or "").strip()
         if query:
-            messages.append({"role": "user", "text": query})
+            msg: dict[str, str | None] = {"role": "user", "text": query}
+            if created_at:
+                msg["created_at"] = created_at
+            messages.append(msg)
 
         response = choose_response(row, answer_column)
         if not keep_references:
             response = choose_response_without_refs(row, response)
         if response:
-            messages.append({"role": "assistant", "text": response})
+            msg = {"role": "assistant", "text": response}
+            if created_at:
+                msg["created_at"] = created_at
+            messages.append(msg)
     return messages
 
 
@@ -368,6 +375,7 @@ async def viking_ingest(
                 session_id=session_id,
                 role=msg["role"],
                 parts=[{"type": "text", "text": msg["text"]}],
+                created_at=msg.get("created_at"),
             )
 
         result = await client.commit_session(session_id, telemetry=True)
