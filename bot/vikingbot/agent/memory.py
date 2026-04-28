@@ -71,25 +71,6 @@ class MemoryStore:
             except Exception as e:
                 logger.warning(f"Failed to read content from {uri}: {e}")
 
-            if content:
-                # Try full version first (no abstract when content is present)
-                memory_str = (
-                    f'<memory index="{idx}" type="full">\n'
-                    f"  <uri>{uri}</uri>\n"
-                    f"  <score>{score}</score>\n"
-                    f"  <content>{content}</content>\n"
-                    f"</memory>"
-                )
-            else:
-                # No content available, use link-only version
-                logger.info(f"Using link-only for {uri} (read failed or empty)")
-                memory_str = (
-                    f'<memory index="{idx}" type="link">\n'
-                    f"  <uri>{uri}</uri>\n"
-                    f"  <score>{score}</score>\n"
-                    f"</memory>"
-                )
-
             # Deduplicate by content hash (use content or abstract as key)
             content_to_hash = content or abstract
             content_hash = hash(content_to_hash)
@@ -98,32 +79,43 @@ class MemoryStore:
             if content_to_hash:
                 seen_content_hashes.add(content_hash)
 
-            # Check if adding this memory would exceed the limit
-            memory_chars = len(memory_str)
-            if user_memories:
-                memory_chars += 1
+            if content:
+                # Try full version first (no abstract when content is present)
+                full_memory_str = (
+                    f'<memory index="{idx}" type="full">\n'
+                    f"  <uri>{uri}</uri>\n"
+                    f"  <score>{score}</score>\n"
+                    f"  <content>{content}</content>\n"
+                    f"</memory>"
+                )
+                full_chars = len(full_memory_str)
+                if user_memories:
+                    full_chars += 1
 
-            if total_chars + memory_chars <= max_chars:
-                user_memories.append(memory_str)
-                total_chars += memory_chars
+                if total_chars + full_chars <= max_chars:
+                    user_memories.append(full_memory_str)
+                    total_chars += full_chars
+                else:
+                    # Full version too big, use link-only version (always add)
+                    link_only_str = (
+                        f'<memory index="{idx}" type="link">\n'
+                        f"  <uri>{uri}</uri>\n"
+                        f"  <score>{score}</score>\n"
+                        f"</memory>"
+                    )
+                    user_memories.append(link_only_str)
+                    # Don't count link-only towards max_chars
             else:
-                # If full version is too big, try link-only version
-                link_only_str = (
+                # No content available, use link-only version (always add)
+                logger.info(f"Using link-only for {uri} (read failed or empty)")
+                memory_str = (
                     f'<memory index="{idx}" type="link">\n'
                     f"  <uri>{uri}</uri>\n"
                     f"  <score>{score}</score>\n"
                     f"</memory>"
                 )
-                link_chars = len(link_only_str)
-                if user_memories:
-                    link_chars += 1
-
-                if total_chars + link_chars <= max_chars:
-                    user_memories.append(link_only_str)
-                    total_chars += link_chars
-                else:
-                    # Even link-only is too big, skip this memory
-                    continue
+                user_memories.append(memory_str)
+                # Don't count link-only towards max_chars
 
         return "\n".join(user_memories)
 
