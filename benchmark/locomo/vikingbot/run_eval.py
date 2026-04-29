@@ -370,10 +370,10 @@ def main():
         help="Update mode: if output file exists, update matching question_index rows instead of overwriting",
     )
     parser.add_argument(
-        "--single-chat",
+        "--group-chat",
         action="store_true",
-        default=True,
-        help="Single-chat mode: no --memory-user passed to vikingbot chat. Default is single-chat mode.",
+        default=False,
+        help="Group-chat mode: pass --memory-user to vikingbot chat. Default is group-chat mode.",
     )
     args = parser.parse_args()
 
@@ -469,7 +469,7 @@ def main():
 
         response, token_usage, time_cost, iteration, tools_used_names = run_vikingbot_chat(
             question, question_time, sample_id, question_id,
-            memory_users=None if args.single_chat else speakers,
+            memory_users=None if not args.group_chat else speakers,
         )
 
         row = {

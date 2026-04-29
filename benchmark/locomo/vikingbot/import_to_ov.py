@@ -76,7 +76,7 @@ def load_locomo_data(
 def build_session_messages(
     item: Dict[str, Any],
     session_range: Optional[Tuple[int, int]] = None,
-    single_chat: bool = True,
+    group_chat: bool = False,
 ) -> List[Dict[str, Any]]:
     """Build session messages for one LoCoMo sample.
 
@@ -84,8 +84,8 @@ def build_session_messages(
     Each dict represents a session with multiple messages (user/assistant role).
 
     Args:
-        single_chat: If True, single-chat mode — no role_id/speaker set on messages.
-                     If False (default), group-chat mode — role_id=speaker.
+        group_chat: If True (default), group-chat mode — role_id=speaker.
+                    If False, single-chat mode — no role_id/speaker on messages.
     """
     conv = item["conversation"]
     speakers = f"{conv['speaker_a']} & {conv['speaker_b']}"
@@ -110,12 +110,12 @@ def build_session_messages(
         for idx, msg in enumerate(conv[sk]):
             speaker = msg.get("speaker", "unknown")
             text = msg.get("text", "")
-            if single_chat:
+            if group_chat:
+                messages.append({"role": "user", "text": text, "speaker": speaker, "index": idx})
+            else:
                 # single-chat 模式下所有消息用统一 user_id 上传，
                 # speaker 信息需要嵌入文本以保留说话人身份
                 messages.append({"role": "user", "text": f"{speaker}: {text}", "index": idx})
-            else:
-                messages.append({"role": "user", "text": text, "speaker": speaker, "index": idx})
 
         sessions.append(
             {
@@ -532,7 +532,7 @@ async def run_import(args: argparse.Namespace) -> None:
             nonlocal success_count, error_count, total_embedding_tokens, total_vlm_tokens
             sample_id = item["sample_id"]
             display_id = f"sample_{sample_index}"
-            sessions = build_session_messages(item, session_range, single_chat=args.single_chat)
+            sessions = build_session_messages(item, session_range, group_chat=args.group_chat)
 
             print(f"\n=== Sample {display_id} ({sample_id}) ===", file=sys.stderr)
             print(f"    {len(sessions)} session(s) to import", file=sys.stderr)
@@ -728,10 +728,10 @@ def main():
         help="Force re-import even if already recorded as completed",
     )
     parser.add_argument(
-        "--single-chat",
+        "--group-chat",
         action="store_true",
-        default=True,
-        help="Single-chat mode: no role_id/speaker on messages. Default is single-chat mode.",
+        default=False,
+        help="Group-chat mode: set role_id/speaker on messages. Default is group-chat mode.",
     )
     parser.add_argument(
         "--clear-ingest-record",

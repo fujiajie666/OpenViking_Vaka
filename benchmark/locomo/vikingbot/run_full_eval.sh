@@ -32,7 +32,6 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKIP_IMPORT=false
-SINGLE_CHAT=true
 AUTO_COMMIT=false
 
 if command -v python3 >/dev/null 2>&1; then
@@ -105,7 +104,7 @@ for arg in "$@"; do
     if [ "$arg" = "--skip-import" ]; then
         SKIP_IMPORT=true
     elif [ "$arg" = "--group-chat" ]; then
-        SINGLE_CHAT=false
+        :  # 默认 group-chat，忽略此开关
     elif [ "$arg" = "--auto-commit" ]; then
         AUTO_COMMIT=true
     fi
@@ -114,16 +113,13 @@ done
 # 过滤掉开关参数，获取位置参数
 ARGS=()
 for arg in "$@"; do
-    if [ "$arg" != "--skip-import" ] && [ "$arg" != "--group-chat" ] && [ "$arg" != "--auto-commit" ]; then
+    if [ "$arg" != "--skip-import" ] && [ "$arg" != "--auto-commit" ]; then
         ARGS+=("$arg")
     fi
 done
 
 # 构建通用选项
-COMMON_OPTS=()
-if [ "$SINGLE_CHAT" = "true" ]; then
-    COMMON_OPTS+=("--single-chat")
-fi
+COMMON_OPTS=("--group-chat")
 
 SAMPLE=${ARGS[0]}
 QUESTION_INDEX=${ARGS[1]}
