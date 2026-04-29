@@ -66,6 +66,14 @@ class MemoryConfig(BaseModel):
             "stateless deployments."
         ),
     )
+    enable_role_id_memory_isolate: bool = Field(
+        default=False,
+        description=(
+            "When enabled, memory extraction uses role_id from messages to determine "
+            "which user/agent the memory belongs to. When disabled (default), role_id "
+            "is ignored and the login user from the request context is used instead."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
 

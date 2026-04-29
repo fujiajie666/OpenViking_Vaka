@@ -18,6 +18,7 @@ from openviking.session.memory.memory_updater import ExtractContext
 from openviking_cli.session.user_id import UserIdentifier
 from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -36,7 +37,18 @@ class MemoryIsolationHandler:
     def __init__(self, ctx: RequestContext, extract_context: Any):
         self.ctx = ctx
         self._extract_context = extract_context
+        config = get_openviking_config()
+        self.enable_role_id_memory_isolate = (
+            config.memory.enable_role_id_memory_isolate if config.memory else False
+        )
 
+    def prepare_messages(self) -> None:
+        """开关关闭时，清空 messages 中的 role_id，使下游统一使用登录用户。"""
+        if self.enable_role_id_memory_isolate:
+            return
+        messages = self._extract_context.messages if self._extract_context else []
+        for msg in messages:
+            msg.role_id = None
 
     def get_read_scope(self) -> RoleScope:
         user_ids = set()
@@ -68,10 +80,7 @@ class MemoryIsolationHandler:
             agent_ids=list(agent_ids),
         )
 
-    def fill_role_ids(
-        self, item_dict: Dict[str, Any],
-            role_scope: RoleScope
-    ) -> None:
+    def fill_role_ids(self, item_dict: Dict[str, Any], role_scope: RoleScope) -> None:
 
         user_ids = set()
         agent_ids = set()
@@ -116,7 +125,6 @@ class MemoryIsolationHandler:
             item_dict["user_ids"] = list(user_ids)
             item_dict["agent_ids"] = list(agent_ids)
 
-
     def _extract_role_ids_from_messages_range(
         self, ranges: Optional[str], user_ids: Set[str], agent_ids: Set[str]
     ):
@@ -132,7 +140,6 @@ class MemoryIsolationHandler:
         if not messages:
             return []
 
-
     def calculate_memory_uris(
         self,
         memory_type_schema: MemoryTypeSchema,
@@ -141,8 +148,12 @@ class MemoryIsolationHandler:
     ):
         policy = self.ctx.namespace_policy
 
-        user_ids = operation.memory_fields.get('user_ids') or [operation.memory_fields.get('user_id')]
-        agent_ids = operation.memory_fields.get('agent_ids') or [operation.memory_fields.get('agent_id')]
+        user_ids = operation.memory_fields.get("user_ids") or [
+            operation.memory_fields.get("user_id")
+        ]
+        agent_ids = operation.memory_fields.get("agent_ids") or [
+            operation.memory_fields.get("agent_id")
+        ]
         # 文件
         uris = set()
         for user_id in user_ids:
@@ -154,7 +165,7 @@ class MemoryIsolationHandler:
                     fields=operation.memory_fields,
                     user_space=user_space,
                     agent_space=agent_space,
-                    extract_context=extract_context
+                    extract_context=extract_context,
                 )
                 uris.add(uri)
 

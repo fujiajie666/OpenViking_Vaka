@@ -13,7 +13,12 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from openviking.core.context import Context
-from openviking.core.namespace import agent_space_fragment, user_space_fragment, to_user_space, to_agent_space
+from openviking.core.namespace import (
+    agent_space_fragment,
+    user_space_fragment,
+    to_user_space,
+    to_agent_space,
+)
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
@@ -166,6 +171,7 @@ class SessionCompressorV2:
 
             # Create MemoryIsolationHandler
             isolation_handler = MemoryIsolationHandler(ctx, extract_context)
+            isolation_handler.prepare_messages()
             # 获取所有记忆 schema 目录并加锁（仅在有锁管理器时）
             orchestrator = self._get_or_create_react(
                 ctx=ctx,
@@ -187,9 +193,13 @@ class SessionCompressorV2:
                             dir_path = render_template(
                                 schema.directory,
                                 {
-                                    'user_space': to_user_space(ctx.namespace_policy, user_id, agent_id),
-                                    'agent_space': to_agent_space(ctx.namespace_policy, user_id, agent_id)
-                                }
+                                    "user_space": to_user_space(
+                                        ctx.namespace_policy, user_id, agent_id
+                                    ),
+                                    "agent_space": to_agent_space(
+                                        ctx.namespace_policy, user_id, agent_id
+                                    ),
+                                },
                             )
                             dir_path = viking_fs._uri_to_path(dir_path, ctx)
                             if dir_path not in memory_schema_dirs:
@@ -232,12 +242,14 @@ class SessionCompressorV2:
                 tracer.info("No memory operations generated")
                 return []
 
-
             updater = self._get_or_create_updater(registry, transaction_handle)
 
             # Apply operations with isolation_handler
             result = await updater.apply_operations(
-                operations, ctx, extract_context=extract_context, isolation_handler=isolation_handler
+                operations,
+                ctx,
+                extract_context=extract_context,
+                isolation_handler=isolation_handler,
             )
 
             tracer.info(
@@ -361,19 +373,23 @@ class SessionCompressorV2:
                 # Old content existed, this is an update
                 raw_before = old_file.plain_content
                 parsed = parse_memory_file_with_fields(raw_before)
-                updates.append({
-                    "uri": uri,
-                    "memory_type": memory_type,
-                    "before": parsed.get("content", raw_before),
-                    "after": "",  # Will be filled after
-                })
+                updates.append(
+                    {
+                        "uri": uri,
+                        "memory_type": memory_type,
+                        "before": parsed.get("content", raw_before),
+                        "after": "",  # Will be filled after
+                    }
+                )
             else:
                 # No old content, this is a new add
-                adds.append({
-                    "uri": uri,
-                    "memory_type": memory_type,
-                    "after": "",  # Will be filled after
-                })
+                adds.append(
+                    {
+                        "uri": uri,
+                        "memory_type": memory_type,
+                        "after": "",  # Will be filled after
+                    }
+                )
 
         # Process edited_uris - these are updates
         for uri in result.edited_uris:
@@ -384,12 +400,14 @@ class SessionCompressorV2:
                 old_content = op.old_memory_file_content.plain_content
             raw_before = old_content or ""
             parsed = parse_memory_file_with_fields(raw_before)
-            updates.append({
-                "uri": uri,
-                "memory_type": memory_type,
-                "before": parsed.get("content", raw_before) if raw_before else "",
-                "after": "",  # Will be filled after
-            })
+            updates.append(
+                {
+                    "uri": uri,
+                    "memory_type": memory_type,
+                    "before": parsed.get("content", raw_before) if raw_before else "",
+                    "after": "",  # Will be filled after
+                }
+            )
 
         # Process deleted_uris - from delete_file_contents
         for uri in result.deleted_uris:
@@ -400,11 +418,13 @@ class SessionCompressorV2:
                 deleted_content = dc.plain_content
             raw_deleted = deleted_content or ""
             parsed = parse_memory_file_with_fields(raw_deleted)
-            deletes.append({
-                "uri": uri,
-                "memory_type": memory_type,
-                "deleted_content": parsed.get("content", raw_deleted),
-            })
+            deletes.append(
+                {
+                    "uri": uri,
+                    "memory_type": memory_type,
+                    "deleted_content": parsed.get("content", raw_deleted),
+                }
+            )
 
         # Read new content for adds and updates
         for item in adds + updates:
@@ -415,7 +435,6 @@ class SessionCompressorV2:
                 item["after"] = parsed.get("content", content)
             except Exception:
                 pass
-
 
         return {
             "archive_uri": archive_uri,
