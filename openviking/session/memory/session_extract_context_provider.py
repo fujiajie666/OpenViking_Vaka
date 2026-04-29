@@ -18,7 +18,10 @@ from openviking.telemetry import tracer
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking.session.memory.core import ExtractContextProvider
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler, RoleScope
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.memory_type_registry import (
+    MemoryTypeRegistry,
+    resolve_memory_templates_dir,
+)
 from openviking.session.memory.tools import (
     add_tool_call_pair_to_messages,
     get_tool,
@@ -32,20 +35,19 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-if TYPE_CHECKING:
-    from openviking.session.memory.memory_updater import ExtractContext
-
 
 class SessionExtractContextProvider(ExtractContextProvider):
     """会话提取 Provider - 从会话消息中提取记忆"""
 
-    def __init__(self, messages: Any,
-                 latest_archive_overview: str = "",
-                 isolation_handler: MemoryIsolationHandler = None,
-                 ctx: RequestContext=None,
-                viking_fs: VikingFS=None,
-                transaction_handle=None,
-            ):
+    def __init__(
+        self,
+        messages: Any,
+        latest_archive_overview: str = "",
+        isolation_handler: MemoryIsolationHandler = None,
+        ctx: RequestContext = None,
+        viking_fs: VikingFS = None,
+        transaction_handle=None,
+    ):
         self.messages = messages
         self.latest_archive_overview = latest_archive_overview
         self._output_language = self._detect_language()
@@ -59,7 +61,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._eager_prefetch = config.memory.eager_prefetch if config.memory else False
         self._prefetch_search_topn = config.memory.prefetch_search_topn if config.memory else 5
         self._ctx = ctx
-        self._viking_fs= viking_fs
+        self._viking_fs = viking_fs
         self._transaction_handle = transaction_handle
 
     @property
@@ -69,7 +71,6 @@ class SessionExtractContextProvider(ExtractContextProvider):
     def set_transaction_handle(self, handle):
         """Set transaction handle after lock is acquired."""
         self._transaction_handle = handle
-
 
     def get_extract_context(self) -> "ExtractContext":
         """获取或创建 ExtractContext 实例（缓存）"""
@@ -109,7 +110,6 @@ The system automatically generates URIs based on memory_type and fields. Just pr
 """
 
         return goal
-
 
     def _build_conversation_message(self) -> Dict[str, Any]:
         """构建包含 Conversation History 的 user message"""
@@ -198,13 +198,10 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             return f"[{idx}][{msg.role}][{role_id_display}]: {format_message_with_parts(msg)}"
 
         conversation_sections.append(
-            "\n".join(
-                [format_message_header(msg, idx) for idx, msg in enumerate(messages)]
-            )
+            "\n".join([format_message_header(msg, idx) for idx, msg in enumerate(messages)])
         )
 
         return "\n\n".join(section for section in conversation_sections if section)
-
 
     def create_tool_context(self, default_search_uris=[]):
         tool_ctx = ToolContext(
@@ -212,13 +209,11 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             request_ctx=self._ctx,
             transaction_handle=self._transaction_handle,
             default_search_uris=default_search_uris,
-            read_file_contents=self._read_file_contents
+            read_file_contents=self._read_file_contents,
         )
         return tool_ctx
 
-    async def prefetch(
-        self
-    ) -> List[Dict]:
+    async def prefetch(self) -> List[Dict]:
         """
         执行 prefetch - 从会话消息中提取相关记忆上下文
 
@@ -251,7 +246,6 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             if not schema.directory:
                 continue
 
-
             # 根据 operation_mode 决定是否需要 ls 和读取其他文件
             if schema.operation_mode == "add_only":
                 continue
@@ -261,9 +255,9 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 for agent_id in rolescope.agent_ids:
                     user_space = to_user_space(policy, user_id, agent_id)
                     agent_space = to_agent_space(policy, user_id, agent_id)
-                    dir_path = render_template(schema.directory, {
-                        "user_space":user_space, "agent_space": agent_space
-                    })
+                    dir_path = render_template(
+                        schema.directory, {"user_space": user_space, "agent_space": agent_space}
+                    )
                     schema_dirs.add(dir_path)
             if schema.filename_has_variables():
                 for dir_path in schema_dirs:
@@ -280,8 +274,6 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
         # 首先读取所有 .overview.md 文件（截断以避免窗口过大）
         # 为 overview 读取创建一个基本的 tool_ctx
-
-
 
         # 在每个之前 ls 的目录内执行 search（替换原来的 ls操作）
         files_to_read_from_search = []  # 收集需要读取的文件（eager_prefetch 模式）
@@ -337,7 +329,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         # eager_prefetch 模式：读取搜索结果 top-N
         if self._eager_prefetch and read_tool:
             # 只读取 top-N 个文件
-            topn_files = files_to_read_from_search[:self._prefetch_search_topn]
+            topn_files = files_to_read_from_search[: self._prefetch_search_topn]
             for file_uri in topn_files:
                 if not file_uri:
                     continue
@@ -368,7 +360,6 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         result = await tool.execute(self.create_tool_context(), **tool_call.arguments)
         return result
 
-
     def get_tools(self) -> List[str]:
         """获取可用的工具列表"""
         if self._eager_prefetch:
@@ -383,12 +374,10 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
     def get_schema_directories(self) -> List[str]:
         """返回需要加载的 schema 目录"""
         if self._schema_directories is None:
-            builtin_dir = os.path.join(
-                os.path.dirname(__file__), "..", "..", "prompts", "templates", "memory"
-            )
+            memory_templates_dir = str(resolve_memory_templates_dir())
             config = get_openviking_config()
             custom_dir = config.memory.custom_templates_dir
-            self._schema_directories = [builtin_dir]
+            self._schema_directories = [memory_templates_dir]
             if custom_dir:
                 custom_dir_expanded = os.path.expanduser(custom_dir)
                 if os.path.exists(custom_dir_expanded):
