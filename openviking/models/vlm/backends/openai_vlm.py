@@ -280,7 +280,7 @@ class OpenAIVLM(VLMBase):
         kwargs: Dict[str, Any] = {
             "model": model,
             "messages": kwargs_messages,
-            "stream": self.stream,
+            "stream": self.stream and not tools,
         }
         if is_reasoning:
             kwargs["reasoning_effort"] = self.reasoning_effort
@@ -318,7 +318,7 @@ class OpenAIVLM(VLMBase):
         kwargs: Dict[str, Any] = {
             "model": model,
             "messages": kwargs_messages,
-            "stream": self.stream,
+            "stream": self.stream and not tools,
         }
         if is_reasoning:
             kwargs["reasoning_effort"] = self.reasoning_effort
