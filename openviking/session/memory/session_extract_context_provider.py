@@ -161,36 +161,14 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             Formatted conversation string
         """
         from openviking.message import Message
-        from openviking.message.part import ToolPart
 
         conversation_sections: List[str] = []
 
         def format_message_with_parts(msg: Message) -> str:
-            """Format message with text and tool parts."""
+            """Format message with text parts only, skipping tool call details."""
             parts = getattr(msg, "parts", [])
-            has_tool_parts = any(isinstance(p, ToolPart) for p in parts)
-
-            if not has_tool_parts:
-                return msg.content
-
-            tool_lines = []
-            text_lines = []
-            for part in parts:
-                if hasattr(part, "text") and part.text:
-                    text_lines.append(part.text)
-                elif isinstance(part, ToolPart):
-                    tool_info = {
-                        "type": "tool_call",
-                        "tool_name": part.tool_name,
-                        "tool_input": part.tool_input,
-                        "tool_status": part.tool_status,
-                    }
-                    if part.skill_uri:
-                        tool_info["skill_name"] = part.skill_uri.rstrip("/").split("/")[-1]
-                    tool_lines.append(f"[ToolCall] {json.dumps(tool_info, ensure_ascii=False)}")
-
-            all_lines = tool_lines + text_lines
-            return "\n".join(all_lines) if all_lines else msg.content
+            text_lines = [part.text for part in parts if hasattr(part, "text") and part.text]
+            return "\n".join(text_lines) if text_lines else msg.content
 
         def format_message_header(msg: Message, idx: int) -> str:
             """Format message header with role and role_id."""
