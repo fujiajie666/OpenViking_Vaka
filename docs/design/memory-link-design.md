@@ -950,25 +950,193 @@ flowchart TB
 - 没有链接类型、没有权重，关系计算靠源文件重叠和图拓扑
 - 4 信号相关性模型比纯 PPR 更丰富，但权重硬编码
 
-### 2.4 竞品启发与设计决策
+### 2.4 OpenKB
 
-**1. PageIdMap 消除死链（vs GBrain auto-link + check-backlinks）**
-GBrain 在 `put_page` 时通过 auto-link post-hook 自动提取实体引用并创建链接，还通过 `check-backlinks` 命令检查并修复回链，用 pg_trgm 模糊 slug matching 缓解读取端问题。但 auto-link 基于正则提取，无法验证目标页面是否存在（可能产生悬空链接）。OV 的 PageIdMap 从结构上杜绝死链——page_id 只分配给上下文中确认存在的文件，链接不可能指向不存在的页面。
+**定位：** 开源 CLI 工具，将原始文档编译成结构化、相互链接的 wiki 风格知识库。受 Andrej Karpathy "LLM Wiki" 想法启发——LLM 自动生成摘要、概念页和交叉引用，让知识随时间积累，而非每次查询重新推导（传统 RAG 的做法）。
 
-**2. 延迟渲染替代写入时链接（vs GBrain 正文 Markdown 链接）**
-GBrain 的 auto-link post-hook 有 stale-link reconciliation 功能，在内容修改时自动移除失效链接。但正文中的 Markdown 链接（如 `[张三](../people/zhangsan.md)`）不会随 slug 改名自动更新，仍是断裂风险点。OV 的 content 保持纯净，链接存在 `links` 元数据中，检索时按需渲染 match_text。target_uri 变化只改元数据，content 不动。
+**输入源：** 文件导入（PDF、docx、pptx、md 等），或文件系统监控（watchdog 自动处理 `raw/` 目录新增文件）。
 
-**3. LinkType 枚举 + weight 权重（vs GBrain 自由文本 + 类型推断 / OpenClaw 无权重）**
-GBrain 的 `links` 表的 `link_type` 列是自由文本，但 auto-link post-hook 能通过类型推断级联自动推断标准类型（founded → invested_in → advises → works_at）。不过 LLM 调 `add_link` 时仍可填入任意值（同义歧义如 `knows` vs `familiar_with`）。OpenClaw 没有权重。OV 用枚举约束关系类型，用 weight 表达关联强度，支持更精细的检索排序。
+**架构：** 文档 → 转换 → 编译（多步 LLM 管线）→ wiki 页面（summaries + concepts + index）
+
+```mermaid
+flowchart TB
+    okb_file[文件\nPDF/docx/pptx/md等] --> okb_hash[Hash去重\nSHA-256\n纯代码]
+    okb_hash -->|已知| okb_skip[跳过]
+    okb_hash -->|新文件| okb_convert[文档转换\nmarkitdown/pymupdf\n纯代码]
+
+    okb_convert -->|短文档| okb_md[wiki/sources/.md\n全文Markdown]
+    okb_convert -->|长PDF\n≥threshold页| okb_pi[PageIndex索引\nLLM在服务端]
+
+    okb_pi --> okb_tree[层级树结构\n+逐页内容]
+    okb_pi --> okb_pi_summary[摘要页\n纯代码渲染]
+
+    okb_md --> okb_step1[Step 1: 生成摘要\nLLM\nsystem+doc=上下文A]
+    okb_pi_summary --> okb_step1_long[Step 1: 生成概述\nLLM\nsystem+doc=上下文A]
+    okb_step1 --> okb_step2
+    okb_step1_long --> okb_step2
+
+    okb_step2[Step 2: 概念规划\nLLM\n复用上下文A] --> okb_plan[create/update/related\n三类动作]
+    okb_plan --> okb_step3[Step 3: 概念生成\nLLM并发\n复用上下文A]
+
+    okb_step3 --> okb_step3b[Step 3b: related链接\n纯代码追加]
+    okb_step3b --> okb_step3c[Step 3c: 双向回链\n纯代码追加]
+    okb_step3c --> okb_step4[Step 4: 更新index.md\n纯代码]
+
+    style okb_step1 fill:#fcf,stroke:#333
+    style okb_step1_long fill:#fcf,stroke:#333
+    style okb_step2 fill:#fcf,stroke:#333
+    style okb_step3 fill:#fcf,stroke:#333
+    style okb_pi fill:#fcf,stroke:#333
+```
+
+#### 文档转换（纯代码，零 LLM）
+
+| 文件类型 | 转换方式 | 输出 |
+|----------|----------|------|
+| `.md` | 直接读取 + 复制相对路径图片并改写链接 | `wiki/sources/{name}.md` |
+| `.pdf`（短，< threshold 页） | pymupdf dict-mode 逐页遍历 text/image block → Markdown + 内联图片 | `wiki/sources/{name}.md` + `wiki/sources/images/{name}/*.png` |
+| `.pdf`（长，≥ threshold 页） | 仅标记 `is_long_doc=True`，不转换，交给 PageIndex | 返回标记 |
+| 其他（docx/pptx/xlsx/html/txt/csv） | markitdown 库转换 → 解码 base64 图片保存磁盘并改写链接 | `wiki/sources/{name}.md` + `wiki/sources/images/{name}/*.png` |
+
+额外操作：原始文件复制到 `raw/` 目录存档，SHA-256 哈希注册到 `hashes.json`。
+
+#### PageIndex 索引（仅长 PDF，LLM 在服务端）
+
+| 子步骤 | 输入 | 计算 | LLM | 输出文件 |
+|--------|------|------|-----|----------|
+| 索引 | PDF 文件 | `PageIndexClient.collection().add(pdf)` — 上传 PDF 到 PageIndex 服务，服务端用 LLM 解析文档结构 | 是（PageIndex 内部） | `doc_id`, `doc_description`, `structure`（层级树） |
+| 获取页面内容 | doc_id, page_count | Cloud 模式：OCR 后的 Markdown；失败回退本地 pymupdf | Cloud 模式用 OCR | `wiki/sources/{name}.json`（per-page 内容数组） |
+| 渲染摘要 | tree 结构 | `render_summary_md()` — 递归遍历树节点，渲染为 Markdown 层级标题 + summary | 否 | `wiki/summaries/{name}.md` |
+
+PageIndex 使用无向量（vectorless）的推理式检索——通过层级树索引实现长文档的结构化访问，不依赖 embedding。
+
+#### Wiki 编译（多步 LLM 管线，prompt 缓存）
+
+编译管线的核心设计是**上下文 A 复用**：Step 1 构造 system_msg（AGENTS.md schema + 语言指令）+ doc_msg（文档内容/PageIndex 摘要），作为 prompt 缓存的前缀；Step 2-3 复用同一前缀，让 LLM 服务端命中缓存，减少重复计算。
+
+**Step 1: 生成摘要/概述**
+
+| 项 | 短文档 | 长文档 |
+|----|--------|--------|
+| Prompt | `_SUMMARY_USER` — 文档全文 + "写摘要页" | `_LONG_DOC_SUMMARY_USER` — PageIndex 摘要 + "写概述" |
+| LLM 调用 | 1 次同步 | 1 次同步 |
+| 输出格式 | JSON `{"brief": "...", "content": "..."}` | 纯 Markdown |
+| 写入文件 | `wiki/summaries/{name}.md`（frontmatter: doc_type=short） | 摘要已在 PageIndex 步骤写好，此步输出作为后续输入 |
+
+**Step 2: 概念规划**
+
+| 项 | 说明 |
+|----|------|
+| 输入 | 上下文 A + 上一步 summary + 已有概念页的 briefs |
+| LLM 调用 | 1 次同步 |
+| 输出 | JSON plan: `{"create": [...], "update": [...], "related": [...]}` |
+
+三种动作：
+- **create**: 新概念，需生成全新页面
+- **update**: 已有概念有新信息，需全文重写（不是追加）
+- **related**: 轻量关联，只加交叉链接不改内容
+
+已有概念页以紧凑格式呈现给 LLM：`- {slug}: {brief}`（brief 从 frontmatter 读取，缺省时截取正文前 150 字符）。
+
+**Step 3: 概念页生成/更新**
+
+| 项 | 说明 |
+|----|------|
+| LLM 调用 | N 次并发异步（N = create 数 + update 数，默认 concurrency=5） |
+| create Prompt | `_CONCEPT_PAGE_USER` — title + doc_name，生成新概念页 |
+| update Prompt | `_CONCEPT_UPDATE_USER` — title + doc_name + **已有概念页全文**，LLM 被要求"全文重写融入新信息，不要追加" |
+| 输出格式 | JSON `{"brief": "...", "content": "..."}` |
+
+写入逻辑：
+- **create**: 新文件，frontmatter 含 `sources` 和 `brief`
+- **update**: 读取已有 frontmatter → 追加 source_file 到 sources 列表 → 替换 body 为 LLM 重写内容 → 更新 brief
+
+**Step 3b/3c: 关联链接 + 双向回链（纯代码，零 LLM）**
+
+| 操作 | 做什么 |
+|------|--------|
+| `_add_related_link()` | 在 related 概念页末尾追加 `See also: [[summaries/{doc}]]` + frontmatter 追加 source |
+| `_backlink_summary()` | 在摘要页追加 `## Related Concepts` 章节，列出所有 `[[concepts/{slug}]]` |
+| `_backlink_concepts()` | 在每个概念页追加 `## Related Documents` 章节，列出 `[[summaries/{doc}]]` |
+
+目的：确保双向链接闭环——摘要链接概念，概念也链接摘要。
+
+**Step 4: 更新索引（纯代码，零 LLM）**
+
+在 `wiki/index.md` 的 `## Documents` 下插入文档条目，`## Concepts` 下插入或更新概念条目。条目格式：`- [[link]] (type) — brief text`。
+
+#### 全流程 LLM 调用汇总
+
+| 步骤 | LLM 调用次数 | 缓存利用 | 备注 |
+|------|-------------|----------|------|
+| Hash 去重 | 0 | — | 纯代码 |
+| 文档转换 | 0 | — | 纯代码 |
+| PageIndex 索引（仅长PDF） | 1+（PageIndex 内部） | — | 对 OpenKB 透明 |
+| Step 1: 生成摘要/概述 | **1** | system+doc 构成缓存上下文 A | 短文档用全文，长文档用 PageIndex 摘要 |
+| Step 2: 概念规划 | **1** | 复用上下文 A（缓存命中） | |
+| Step 3: 概念页生成 | **N**（create+update 数） | 复用上下文 A（缓存命中） | 并发执行，默认 concurrency=5 |
+| Step 3b/3c: 关联+回链 | 0 | — | 纯代码 |
+| Step 4: 更新索引 | 0 | — | 纯代码 |
+
+典型短文档：2 + N 次 LLM 调用（1 摘要 + 1 规划 + N 概念页）。典型长 PDF：2 + N 次加 PageIndex 内部调用。
+
+#### 链接系统
+
+**链接载体：** 正文内 `[[wikilink]]` 语法（如 `[[concepts/attention]]`、`[[summaries/attention-is-all-you-need]]`）。
+
+**链接类型：** 无类型系统，所有链接都是无类型的 wikilink，无法区分"属于""导致""矛盾"等关系语义。
+
+**链接权重：** 无权重，所有链接等价。
+
+**双向链接机制：** 通过代码级回链保证——编译管线的 Step 3b/3c 在写入后立即补全反向链接。但只在编译时执行，如果后续手动编辑页面删除了链接，反向链接不会自动清理。
+
+**链接精度：** 页面级（`[[concepts/slug]]`），不支持行号级定位。
+
+#### 搜索/问答
+
+- **query 命令**：OpenAI Agents SDK 驱动的 LLM agent，3 个工具（`read_file`、`get_page_content`、`get_image`）导航已编译 wiki 回答问题
+- **chat 命令**：交互式多轮对话 REPL，支持会话持久化、slash commands
+- **无向量化搜索**：query/chat agent 依赖 LLM 自主决策读哪些页面，不做 embedding 检索
+
+#### Lint 检查
+
+| 层级 | 检查内容 | 计算方式 |
+|------|----------|----------|
+| 结构性 lint | 断链、孤儿页、raw 文件缺 wiki 条目、index.md 不同步 | 纯代码（正则匹配 wikilink） |
+| 语义 lint | 矛盾、遗漏、过时、冗余、概念覆盖 | LLM agent（OpenAI Agents SDK） |
+
+#### 定时整理
+
+**无定时整理。** 所有知识产出在文件导入时一次性完成（多步 LLM 编译管线），没有后续的矛盾发现、过时更新或跨页面整合机制。随着页面增多，概念页可能过时但不自动刷新。
+
+#### 关键取舍
+
+- 链接存正文（`[[wikilink]]`），slug 变更时链接失效，无 stale-link reconciliation
+- 无链接类型和权重，所有关系等价，无法区分"属于""导致""矛盾"等语义
+- 双向回链仅在编译时保证，手动编辑后可能不一致
+- 无定时整理/矛盾发现，知识库长期维护依赖人工 lint
+- 多步 LLM 管线的 prompt 缓存设计有效降低重复计算，但每次编译都是全量生成（无增量更新）
+- PageIndex 的无向量检索是对传统 RAG 的有趣替代，但仅限于长 PDF 场景
+
+### 2.5 竞品启发与设计决策
+
+**1. PageIdMap 消除死链（vs GBrain auto-link + check-backlinks / OpenKB 编译时回链）**
+GBrain 在 `put_page` 时通过 auto-link post-hook 自动提取实体引用并创建链接，还通过 `check-backlinks` 命令检查并修复回链，用 pg_trgm 模糊 slug matching 缓解读取端问题。但 auto-link 基于正则提取，无法验证目标页面是否存在（可能产生悬空链接）。OpenKB 在编译时通过代码级 `_backlink_summary` / `_backlink_concepts` 保证双向链接，但仅在编译时刻执行，手动编辑或 slug 变更后链接可能断裂，且无 stale-link reconciliation。OV 的 PageIdMap 从结构上杜绝死链——page_id 只分配给上下文中确认存在的文件，链接不可能指向不存在的页面。
+
+**2. 延迟渲染替代写入时链接（vs GBrain 正文 Markdown 链接 / OpenKB [[wikilink]] 正文链接）**
+GBrain 的 auto-link post-hook 有 stale-link reconciliation 功能，在内容修改时自动移除失效链接。但正文中的 Markdown 链接（如 `[张三](../people/zhangsan.md)`）不会随 slug 改名自动更新，仍是断裂风险点。OpenKB 同样把链接写在正文中（`[[wikilink]]`），编译时生成，无 reconciliation 机制，slug 变更直接导致断链。OV 的 content 保持纯净，链接存在 `links` 元数据中，检索时按需渲染 match_text。target_uri 变化只改元数据，content 不动。
+
+**3. LinkType 枚举 + weight 权重（vs GBrain 自由文本 + 类型推断 / OpenClaw 无权重 / OpenKB 无类型无权重）**
+GBrain 的 `links` 表的 `link_type` 列是自由文本，但 auto-link post-hook 能通过类型推断级联自动推断标准类型（founded → invested_in → advises → works_at）。不过 LLM 调 `add_link` 时仍可填入任意值（同义歧义如 `knows` vs `familiar_with`）。OpenClaw 没有权重。OpenKB 的 `[[wikilink]]` 完全没有类型和权重，所有链接等价，无法区分"属于""导致""矛盾"等语义。OV 用枚举约束关系类型，用 weight 表达关联强度，支持更精细的检索排序。
 
 **4. 不引入 Claims 层（from OpenClaw 启发）**
 OpenClaw 的 Claims 三层链接 + 矛盾检测 + freshness 评估是一套完整的知识可信度管理，但 OV 不引入独立 claims 层。原因：原始 md 已包含事实记录，links 体系已覆盖 claim 的核心能力——矛盾（`CONTRADICTS`）、演变（`EVOLVED_FROM`）、可信度（`weight`）、证据溯源（`t_uri + t_field + t_line_ranges`）。独立 claim 层只是 links 的冗余子集。
 
-**5. 链接元数据 vs 正文内链接（from nashsu_llm_wiki 启发）**
-nashsu_llm_wiki 把链接写在正文中（`[[wikilink]]`），slug 变更时链接失效，且无法携带类型和权重。GBrain 的结构化链接存储在独立数据库表中（不在正文中），auto-link post-hook 通过 stale-link reconciliation 自动修复内容变更引起的失效链接，但正文中的 Markdown 交叉引用仍有 slug 变更问题。OV 的链接存在元数据中，正文保持纯净，与第 2 点延迟渲染策略一致。
+**5. 链接元数据 vs 正文内链接（from nashsu_llm_wiki / OpenKB 启发）**
+nashsu_llm_wiki 和 OpenKB 都把链接写在正文中（`[[wikilink]]`），slug 变更时链接失效，且无法携带类型和权重。GBrain 的结构化链接存储在独立数据库表中（不在正文中），auto-link post-hook 通过 stale-link reconciliation 自动修复内容变更引起的失效链接，但正文中的 Markdown 交叉引用仍有 slug 变更问题。OV 的链接存在元数据中，正文保持纯净，与第 2 点延迟渲染策略一致。
 
-**6. 外部 Bot T+1 触发主题整合 vs Dream Cycle 维护管道（from GBrain + nashsu_llm_wiki 启发）**
-nashsu_llm_wiki 没有定时整理，全靠攒批提取时一次性产出。GBrain 的 Dream Cycle 是纯维护管道（lint → backlinks → sync → extract → embed → orphans），不涉及 LLM，没有记忆整合或实体升级功能。随着页面增多，一次性提取或纯维护都难以发现跨页面的矛盾、过时和遗漏。OV 的整理由外部 Bot T+1 触发，从已有记忆中发现问题，调用 ExtractLoop 生成报告，保持知识库活力。
+**6. 外部 Bot T+1 触发主题整合 vs Dream Cycle 维护管道（from GBrain + nashsu_llm_wiki + OpenKB 启发）**
+nashsu_llm_wiki 和 OpenKB 都没有定时整理，全靠导入/编译时一次性产出。GBrain 的 Dream Cycle 是纯维护管道（lint → backlinks → sync → extract → embed → orphans），不涉及 LLM，没有记忆整合或实体升级功能。随着页面增多，一次性提取或纯维护都难以发现跨页面的矛盾、过时和遗漏。OpenKB 的语义 lint 能发现矛盾和过时，但需人工触发，无自动整理。OV 的整理由外部 Bot T+1 触发，从已有记忆中发现问题，调用 ExtractLoop 生成报告，保持知识库活力。
 
 **7. 现有 merge_op 映射（vs GBrain 页面内容覆写 / OpenClaw Dreaming）**
 OV 已有的 merge_op 体系与竞品的记忆整理模式天然对应：
@@ -977,8 +1145,11 @@ OV 已有的 merge_op 体系与竞品的记忆整理模式天然对应：
 - 外部 Bot T+1 触发主题整合 ≈ OpenClaw Phase 2/3（短期→长期提升 + 关键词频率标记主题）
 无需新建整理范式，复用现有机制即可。
 
-**8. PPR 搜索增强（vs GBrain backlink boost / nashsu_llm_wiki 4 信号图扩展）**
-GBrain 已实现 backlink boost——搜索排序时被更多页面链接的实体排名更高（BrainBench v1: P@5 +5.4pts, Recall@5 +11.5pts），但这是简单排序加分，不做图传播，无法发现种子文件多跳之外的关联。OV 用 PPR 算法实现 query 相关的图增强检索，从搜索种子出发沿 links 做带权随机游走，天然支持多种子桥接发现，详见 3.5 节。nashsu_llm_wiki 用 4 信号加权做图扩展，但权重硬编码且无类型区分；OV 的 PPR 按 `(link_type, links/backlinks)` 配置表驱动，灵活可调。
+**8. PPR 搜索增强（vs GBrain backlink boost / nashsu_llm_wiki 4 信号图扩展 / OpenKB LLM agent 导航）**
+GBrain 已实现 backlink boost——搜索排序时被更多页面链接的实体排名更高（BrainBench v1: P@5 +5.4pts, Recall@5 +11.5pts），但这是简单排序加分，不做图传播，无法发现种子文件多跳之外的关联。OV 用 PPR 算法实现 query 相关的图增强检索，从搜索种子出发沿 links 做带权随机游走，天然支持多种子桥接发现，详见 3.5 节。nashsu_llm_wiki 用 4 信号加权做图扩展，但权重硬编码且无类型区分；OV 的 PPR 按 `(link_type, links/backlinks)` 配置表驱动，灵活可调。OpenKB 不做图增强，query/chat 完全依赖 LLM agent 自主决策导航 wiki 页面，召回能力受 agent 推理能力限制。
+
+**9. ExtractLoop 统一提取 vs 多步编译管线（from OpenKB 启发）**
+OpenKB 的编译管线是精心设计的多步 LLM 调用链：摘要 → 概念规划 → 并发概念生成 → 代码级回链 → 索引更新，每步有明确的输入/输出契约，且通过 prompt 缓存复用上下文降低成本。但每次新文档导入都独立走完整管线，概念页的"update"路径依赖 LLM 全文重写（非增量），随着页面增多成本线性增长。OV 的 ExtractLoop 在单次 LLM 调用中统一输出记忆操作 + links，由 merge_op 体系处理增量合并（`upsert` PATCH / `add_only` SUM），更轻量且天然支持增量更新。
 
 ## 3. OpenViking 链接设计
 
