@@ -216,7 +216,7 @@ def init_tracer(
         trace_provider.add_span_processor(
             BatchSpanProcessor(
                 trace_exporter,
-                max_export_batch_size=100,
+                max_export_batch_size=50,
                 schedule_delay_millis=1000,
                 export_timeout_millis=60000,
             )
