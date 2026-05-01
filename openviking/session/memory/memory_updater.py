@@ -408,8 +408,12 @@ class MemoryUpdater:
         request_wait_tracker = get_request_wait_tracker()
 
         # Collect all URIs to vectorize (skip .overview.md and .abstract.md - they are handled separately)
+        # Also skip URIs that were deleted in the same batch
         uris_to_vectorize = []
+        deleted_set = set(result.deleted_uris)
         for uri in result.written_uris + result.edited_uris:
+            if uri in deleted_set:
+                continue
             if not uri.endswith("/.overview.md") and not uri.endswith("/.abstract.md"):
                 uris_to_vectorize.append(uri)
 
