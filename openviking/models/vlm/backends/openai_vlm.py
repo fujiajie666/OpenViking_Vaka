@@ -217,8 +217,8 @@ class OpenAIVLM(VLMBase):
         else:
             kwargs["temperature"] = self.temperature
         self._apply_provider_specific_extra_body(kwargs, thinking)
-        if self.max_tokens is not None:
-            kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = self.max_tokens
+        max_tokens = self.max_tokens or 32768
+        kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
@@ -254,8 +254,8 @@ class OpenAIVLM(VLMBase):
         else:
             kwargs["temperature"] = self.temperature
         self._apply_provider_specific_extra_body(kwargs, thinking)
-        if self.max_tokens is not None:
-            kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = self.max_tokens
+        max_tokens = self.max_tokens or 32768
+        kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
