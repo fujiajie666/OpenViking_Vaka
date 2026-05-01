@@ -221,10 +221,10 @@ class SchemaModelGenerator:
         for mt in enabled_memory_types:
             flat_model = self.create_flat_data_model(mt, role_scope)
             # Always use List to support multiple users' memories (e.g., identity for different user_id/agent_id)
-            field_definitions[f"extract_{mt.memory_type}"] = (
+            field_definitions[mt.memory_type] = (
                 List[flat_model],  # type: ignore
                 Field(
-                    default_factory=list, description=f"{mt.memory_type} memories (add or edit)"
+                    default_factory=list, description=f"{mt.memory_type} memories (top-level field, do not nest inside other arrays)"
                 ),
             )
 
@@ -245,7 +245,7 @@ class SchemaModelGenerator:
         def is_empty(self) -> bool:
             """Check if there are any operations."""
             for mt_name in memory_type_fields:
-                value = getattr(self, f"extract_{mt_name}", None)
+                value = getattr(self, mt_name, None)
                 if value is not None:
                     if isinstance(value, list):
                         if len(value) > 0:
@@ -261,7 +261,7 @@ class SchemaModelGenerator:
             edit_uris = []
 
             for mt_name in memory_type_fields:
-                value = getattr(self, f"extract_{mt_name}", None)
+                value = getattr(self, mt_name, None)
                 if value is None:
                     continue
                 if isinstance(value, list):

@@ -140,7 +140,7 @@ class ExtractLoop:
         if self._extract_context is None:
             raise ValueError("Failed to get ExtractContext from provider")
         for schema in schemas:
-            self._expected_fields.append(f"extract_{schema.memory_type}")
+            self._expected_fields.append(f"{schema.memory_type}")
 
         # 预计算 operations_model
         role_scope = self._isolation_handler.get_read_scope() if self._isolation_handler else None
@@ -270,7 +270,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
         # 遍历每个 memory_type 字段
         for schema in self.context_provider.get_memory_schemas(self.ctx):
             memory_type = schema.memory_type
-            value = getattr(operations, f"extract_{memory_type}", None)
+            value = getattr(operations, memory_type, None)
             if value is None:
                 continue
 
