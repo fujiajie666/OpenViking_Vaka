@@ -381,8 +381,10 @@ class MemoryUpdater:
 
         # Delete from VikingFS
         # VikingFS automatically handles vector index cleanup
+        # Pass transaction_handle so rm() reuses the compressor's subtree lock
+        # instead of trying to acquire a new lock (which would conflict).
         try:
-            await viking_fs.rm(uri, recursive=False, ctx=ctx)
+            await viking_fs.rm(uri, recursive=False, ctx=ctx, lock_handle=self._transaction_handle)
         except NotFoundError:
             tracer.error(f"Memory not found for delete: {uri}")
             # Idempotent - deleting non-existent file succeeds
