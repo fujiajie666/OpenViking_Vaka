@@ -1239,12 +1239,12 @@ flowchart TB
 - **处理**：LLM 生成每文件摘要 → 汇总生成 .abstract.md 和 .overview.md → 摘要文件入队向量化
 - **输出**：.abstract.md + .overview.md + 摘要 EmbeddingMsg
 
-**5. 外部 Bot T+1 触发整理**
-- **触发**：外部 Bot T+1 触发（如次日由外部 Bot 调用）
+**5. T+1 触发整理**
+- **触发**：暴露 CLI 供 Bot 通过 Cron 触发
 - **输入**：当天新增/修改的记忆文件 + 已有 report 列表 + report_candidate
 - **处理**：
-  1. 主题发现：新记忆无关联 report → 新主题；CONTRADICTS 链接 → 冲突主题；report_candidate → 用户主动主题
-  2. 逐主题生成：整理 ContextProvider 读取相关文件 → ExtractLoop 调 LLM 按 report schema 输出 → MemoryUpdater 写入
+  1. 主题发现：新记忆无关联 report → 新主题；CONTRADICTS 链接 → 冲突主题；report_candidate → 候选主题
+  2. 逐主题生成：DreamContextProvider 读取相关文件 → ExtractLoop 调 LLM 按 report schema 输出 → MemoryUpdater 写入
 - **输出**：report 文件（问题驱动的研究报告）+ report_candidate 标记已处理
 
 **6. PPR 图增强检索**
