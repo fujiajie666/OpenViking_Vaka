@@ -106,16 +106,6 @@ def load_rows(input_path: str) -> tuple[list[dict], list[str]]:
         fieldnames = list(reader.fieldnames or [])
         rows = list(reader)
 
-    fieldnames = [
-        name
-        for name in fieldnames
-        if name
-        not in {
-            "memory_retrieval_session_id",
-            "memory_retrieval_time_cost",
-            "memory_retrieval_message",
-        }
-    ]
     if "retrieved_memories_json" not in fieldnames:
         fieldnames.append("retrieved_memories_json")
     if "retrieved_memories_text" not in fieldnames:

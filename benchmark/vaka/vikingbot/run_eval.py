@@ -22,10 +22,11 @@ FIELDNAMES = [
     "question",
     "standard_answer",
     "response",
-    "response_without_ref",
     "time_cost",
     "result",
     "reasoning",
+    "retrieved_memories_json",
+    "retrieved_memories_text",
 ]
 
 
@@ -59,21 +60,19 @@ async def chat_with_bot(
     user_id: str | None = None,
     account: str | None = None,
     api_key: str | None = None,
-) -> tuple[str, float]:
-    """调用 OpenViking /bot/v1/chat 端点生成回答，返回 (回答文本, 耗时秒)"""
+) -> tuple[dict, float]:
+    """调用 OpenViking /bot/v1/chat 端点生成回答，返回 (完整响应dict, 耗时秒)"""
     import httpx
 
     url = f"{openviking_url.rstrip('/')}/bot/v1/chat"
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["X-API-Key"] = api_key
-    # 4. trusted mode 需要携带 account 和 user 头
     if account:
         headers["X-OpenViking-Account"] = account
     if user_id:
         headers["X-OpenViking-User"] = user_id
 
-    # 4. 构造 ChatRequest 请求体
     body = {
         "message": question,
         "session_id": session_id,
@@ -84,28 +83,108 @@ async def chat_with_bot(
 
     start_time = time.time()
     async with httpx.AsyncClient(timeout=300.0) as client:
-        response = await client.post(url, json=body, headers=headers)
+        resp = await client.post(url, json=body, headers=headers)
 
     time_cost = time.time() - start_time
 
-    if response.status_code != 200:
-        return f"[HTTP ERROR] status={response.status_code}, body={response.text[:200]}", time_cost
+    if resp.status_code != 200:
+        return {
+            "message": f"[HTTP ERROR] status={resp.status_code}, body={resp.text[:200]}",
+            "relevant_memories": "",
+        }, time_cost
 
     try:
-        data = response.json()
-        # 5. 解析 ChatResponse，提取 message 字段
-        message = data.get("message", "")
-        if not message:
-            return f"[EMPTY RESPONSE] {json.dumps(data, ensure_ascii=False)[:200]}", time_cost
-        return message, time_cost
+        data = resp.json()
+        if not isinstance(data, dict):
+            return {
+                "message": f"[INVALID RESPONSE] {str(data)[:200]}",
+                "relevant_memories": "",
+            }, time_cost
+        return data, time_cost
     except (json.JSONDecodeError, ValueError) as exc:
-        return f"[PARSE ERROR] {str(exc)}: {response.text[:200]}", time_cost
+        return {
+            "message": f"[PARSE ERROR] {str(exc)}: {resp.text[:200]}",
+            "relevant_memories": "",
+        }, time_cost
 
 
-# 6. 单个 QA 处理
+# 6. 提取召回记忆
+def _extract_memories_from_payload(payload: object) -> list[dict]:
+    if isinstance(payload, str):
+        text = payload.strip()
+        if not text:
+            return []
+        try:
+            payload = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return []
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        memories = payload.get("memories")
+        if isinstance(memories, list):
+            return [item for item in memories if isinstance(item, dict)]
+    return []
+
+
+def extract_retrieved_memories(data: dict) -> tuple[str, list[dict]]:
+    """Extract retrieved memories from bot response. Returns (query_memory_text, llm_memories_list)."""
+    query_memory = ""
+    val = data.get("relevant_memories")
+    if isinstance(val, str):
+        query_memory = val
+
+    llm_memories: list[dict] = []
+    events = data.get("events")
+    if isinstance(events, list):
+        for event in events:
+            if not isinstance(event, dict) or event.get("type") != "tool_result":
+                continue
+            llm_memories.extend(_extract_memories_from_payload(event.get("data")))
+
+    deduped: list[dict] = []
+    seen: set[str] = set()
+    for memory in llm_memories:
+        key = memory.get("uri")
+        if not isinstance(key, str) or not key:
+            key = json.dumps(memory, ensure_ascii=False, sort_keys=True)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(memory)
+
+    return query_memory, deduped
+
+
+def build_memories_text(query_memory: str, llm_memories: list[dict]) -> str:
+    parts: list[str] = []
+    if query_memory.strip():
+        parts.append(query_memory.strip())
+    if llm_memories:
+        lines: list[str] = []
+        for memory in llm_memories:
+            uri = str(memory.get("uri") or "")
+            score = memory.get("score")
+            score_text = f"{float(score):.6f}" if isinstance(score, (int, float)) else ""
+            abstract = str(memory.get("abstract") or "").replace("\n", " ").strip()
+            entry_parts = []
+            if score_text:
+                entry_parts.append(f"[{score_text}]")
+            if uri:
+                entry_parts.append(uri)
+            if abstract:
+                entry_parts.append(abstract)
+            if entry_parts:
+                lines.append(" | ".join(entry_parts))
+        if lines:
+            parts.append("\n".join(lines))
+    return "\n\n".join(parts)
+
+
+# 7. 单个 QA 处理
 async def process_single_qa(
     qa_item: dict,
-    idx: int,
+    orig_idx: int,
     total_count: int,
     *,
     openviking_url: str,
@@ -115,13 +194,13 @@ async def process_single_qa(
 ) -> dict:
     """处理单个 QA：调用 /bot/v1/chat 生成回答"""
     question = qa_item["question"]
-    question += "\n请尽量简短作答，只回答与问题直接相关的内容，不要展开无关信息，但确保不遗漏问题要求的关键信息。"
+    # question += "\n请尽量简短作答，只回答与问题直接相关的内容，不要展开无关信息，但确保不遗漏问题要求的关键信息。"
     standard_answer = qa_item.get("standard_answer", "")
-    print(f"Processing {idx}/{total_count}: {question[:60]}...")
+    print(f"Processing {orig_idx}/{total_count}: {question[:60]}...")
 
-    # 7. 每个问题使用独立 session，避免上下文干扰
-    session_id = f"vaka_eval_q{idx}"
-    response, time_cost = await chat_with_bot(
+    # 8. 每个问题使用独立 session，避免上下文干扰
+    session_id = f"vaka_eval_qa_02{orig_idx}"
+    data, time_cost = await chat_with_bot(
         question,
         openviking_url=openviking_url,
         session_id=session_id,
@@ -129,16 +208,27 @@ async def process_single_qa(
         account=account,
         api_key=api_key,
     )
-    print(f"Completed {idx}/{total_count}, time cost: {round(time_cost, 2)}s")
+    response = data.get("message", "")
+    print(f"Completed {orig_idx}/{total_count}, time cost: {round(time_cost, 2)}s")
+
+    # 提取召回记忆
+    query_memory, llm_memories = extract_retrieved_memories(data)
+    memories_json = json.dumps(
+        {"query_memory": query_memory, "llm_memory": llm_memories},
+        ensure_ascii=False,
+    )
+    memories_text = build_memories_text(query_memory, llm_memories)
 
     return {
-        "question_index": idx - 1,
+        "question_index": orig_idx,
         "question": question,
         "standard_answer": standard_answer,
         "response": response,
         "time_cost": round(time_cost, 2),
         "result": "",
         "reasoning": "",
+        "retrieved_memories_json": memories_json,
+        "retrieved_memories_text": memories_text,
     }
 
 
@@ -154,6 +244,18 @@ async def run_eval(args: argparse.Namespace) -> None:
     print(f"Loaded {total} question(s) from {input_path}")
     print(f"OpenViking: {args.openviking_url}")
     print(f"User: {args.user_id}")
+
+    # 按 question_index 过滤，保留原始 0-based 索引
+    if args.question_index is not None:
+        indices = [int(x) for x in args.question_index.split(",")]
+        indices_set = set(indices)
+        qa_list = [(i, qa) for i, qa in enumerate(qa_list) if i in indices_set]
+        if not qa_list:
+            print(f"No questions matched --question-index={args.question_index}")
+            return
+        print(f"Filtered to {len(qa_list)} question(s) by --question-index={args.question_index}")
+    else:
+        qa_list = list(enumerate(qa_list))
 
     output_path = Path(args.output).expanduser()
     os.makedirs(output_path.parent, exist_ok=True)
@@ -179,7 +281,7 @@ async def run_eval(args: argparse.Namespace) -> None:
             csv.DictWriter(f, fieldnames=FIELDNAMES).writeheader()
 
     # 过滤掉已完成的题目
-    pending = [(i, qa) for i, qa in enumerate(qa_list, 1) if (i - 1) not in completed_indices]
+    pending = [(orig_idx, qa) for orig_idx, qa in qa_list if orig_idx not in completed_indices]
     if not pending:
         print("All questions already completed. Nothing to do.")
         return
@@ -189,11 +291,11 @@ async def run_eval(args: argparse.Namespace) -> None:
     semaphore = asyncio.Semaphore(args.parallel)
     file_lock = asyncio.Lock()
 
-    async def process_and_save(idx: int, qa_item: dict) -> None:
+    async def process_and_save(orig_idx: int, qa_item: dict) -> None:
         async with semaphore:
             row = await process_single_qa(
                 qa_item,
-                idx,
+                orig_idx,
                 total,
                 openviking_url=args.openviking_url,
                 user_id=args.user_id,
@@ -204,7 +306,7 @@ async def run_eval(args: argparse.Namespace) -> None:
             with open(output_path, "a", encoding="utf-8", newline="") as f:
                 csv.DictWriter(f, fieldnames=FIELDNAMES).writerow(row)
 
-    await asyncio.gather(*[process_and_save(i, qa) for i, qa in pending])
+    await asyncio.gather(*[process_and_save(orig_idx, qa) for orig_idx, qa in pending])
     print(f"Evaluation completed, results saved to {output_path}")
 
 
@@ -228,6 +330,11 @@ def main() -> None:
         type=int,
         default=None,
         help="Maximum number of questions to evaluate, default: all",
+    )
+    parser.add_argument(
+        "--question-index",
+        default=None,
+        help="Only run specific question indices, comma-separated (e.g. '0,3,7'). default: all",
     )
     parser.add_argument(
         "--parallel",

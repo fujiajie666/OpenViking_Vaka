@@ -26,7 +26,7 @@ class MemoryStore:
         return ""
 
     async def _parse_viking_memory(
-        self, result: Any, client: Any, min_score: float = 0.3, max_chars: int = 4000
+        self, result: Any, client: Any, min_score: float = 0.3, max_chars: int = 4000, max_count: int = 15
     ) -> str:
         """Parse viking memory with score filtering and character limit.
         Automatically reads full content for memories above threshold.
@@ -36,6 +36,7 @@ class MemoryStore:
             client: VikingClient instance to read content
             min_score: Minimum score threshold (default: 0.4)
             max_chars: Maximum character limit for output (default: 4000)
+            max_count: Maximum number of memories to return (default: 12)
 
         Returns:
             Formatted memory string within character limit
@@ -53,6 +54,9 @@ class MemoryStore:
         total_chars = 0
 
         for idx, memory in enumerate(filtered_memories, start=1):
+            if len(user_memories) >= max_count:
+                break
+
             uri = getattr(memory, "uri", "")
             score = getattr(memory, "score", 0.0)
 
@@ -80,7 +84,14 @@ class MemoryStore:
                     f"</memory>"
                 )
 
-            # Check if adding this memory would exceed the limit
+            is_events = "/memories/events/" in uri
+
+            # Events memories: always include as full, not counted towards budget
+            if is_events and content:
+                user_memories.append(memory_str)
+                continue
+
+            # Non-events memories: subject to budget check
             memory_chars = len(memory_str)
             if user_memories:
                 memory_chars += 1
