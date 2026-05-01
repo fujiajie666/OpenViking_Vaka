@@ -140,7 +140,7 @@ class ExtractLoop:
         if self._extract_context is None:
             raise ValueError("Failed to get ExtractContext from provider")
         for schema in schemas:
-            self._expected_fields.append(schema.memory_type)
+            self._expected_fields.append(f"extract_{schema.memory_type}")
 
         # 预计算 operations_model
         role_scope = self._isolation_handler.get_read_scope() if self._isolation_handler else None
