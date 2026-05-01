@@ -270,7 +270,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
         # 遍历每个 memory_type 字段
         for schema in self.context_provider.get_memory_schemas(self.ctx):
             memory_type = schema.memory_type
-            value = getattr(operations, memory_type, None)
+            value = getattr(operations, f"extract_{memory_type}", None)
             if value is None:
                 continue
 
@@ -278,8 +278,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
             items = value if isinstance(value, list) else [value]
 
             for item in items:
-                # 转换为 dict，去掉 extract_ 前缀
-                item_dict = {k.removeprefix("extract_"): v for k, v in dict(item).items()}
+                # 转换为 dict
+                item_dict = dict(item)
                 item_dict['memory_type'] = memory_type
                 # 填充 user_id 和 agent_id
                 self._isolation_handler.fill_role_ids(item_dict, role_scope=role_scope)

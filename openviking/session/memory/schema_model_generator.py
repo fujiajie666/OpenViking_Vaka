@@ -98,10 +98,9 @@ class SchemaModelGenerator:
         # Add business fields from schema
         for field in memory_type.fields:
             base_type = self._map_field_type(field.field_type)
-            prefixed_name = f"extract_{field.name}"
             if field.merge_op == MergeOp.IMMUTABLE:
                 # Immutable fields: only base type, required
-                field_definitions[prefixed_name] = (
+                field_definitions[field.name] = (
                     base_type,
                     Field(..., description=field.description),
                 )
@@ -111,7 +110,7 @@ class SchemaModelGenerator:
                 patch_type = merge_op.get_output_schema_type(field.field_type)
                 union_type = Union[base_type, patch_type]
                 desc = merge_op.get_output_schema_description(field.description)
-                field_definitions[prefixed_name] = (
+                field_definitions[field.name] = (
                     Optional[union_type],
                     Field(None, description=desc),
                 )
@@ -222,7 +221,7 @@ class SchemaModelGenerator:
         for mt in enabled_memory_types:
             flat_model = self.create_flat_data_model(mt, role_scope)
             # Always use List to support multiple users' memories (e.g., identity for different user_id/agent_id)
-            field_definitions[mt.memory_type] = (
+            field_definitions[f"extract_{mt.memory_type}"] = (
                 List[flat_model],  # type: ignore
                 Field(
                     default_factory=list, description=f"{mt.memory_type} memories (add or edit)"
@@ -245,8 +244,8 @@ class SchemaModelGenerator:
         # Add custom methods
         def is_empty(self) -> bool:
             """Check if there are any operations."""
-            for field_name in memory_type_fields:
-                value = getattr(self, field_name, None)
+            for mt_name in memory_type_fields:
+                value = getattr(self, f"extract_{mt_name}", None)
                 if value is not None:
                     if isinstance(value, list):
                         if len(value) > 0:
@@ -261,8 +260,8 @@ class SchemaModelGenerator:
             write_uris = []
             edit_uris = []
 
-            for field_name in memory_type_fields:
-                value = getattr(self, field_name, None)
+            for mt_name in memory_type_fields:
+                value = getattr(self, f"extract_{mt_name}", None)
                 if value is None:
                     continue
                 if isinstance(value, list):
