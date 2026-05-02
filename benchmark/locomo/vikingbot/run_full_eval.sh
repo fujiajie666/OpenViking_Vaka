@@ -9,6 +9,7 @@
 #   ./run_full_eval.sh 0 --skip-import              # 跳过导入，批量评测
 #   ./run_full_eval.sh 0 2 --skip-import --group-chat   # 跳过导入，单题群聊模式
 #   ./run_full_eval.sh --skip-import --auto-commit  # 评测全部，跳过导入，自动提交
+#   ./run_full_eval.sh --retry-wrong result/locomo_result_xxx.csv  # 只重跑错题
 
 set -e
 
@@ -26,6 +27,7 @@ for arg in "$@"; do
         echo "  --skip-import     跳过导入步骤，直接使用已导入的数据进行评测"
         echo "  --group-chat      群聊模式，设置 role_id/speaker，传 --memory-user"
         echo "  --auto-commit     自动提交未提交的代码变更，结果文件名带 commit id 和时间戳"
+        echo "  --retry-wrong CSV 只重跑指定结果文件中的有效错题（导入相关对话+重新问答）"
         exit 0
     fi
 done
@@ -34,6 +36,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKIP_IMPORT=false
 GROUP_CHAT=false
 AUTO_COMMIT=false
+RETRY_WRONG=""
 
 if command -v python3 >/dev/null 2>&1; then
     PYTHON_BIN="python3"
@@ -101,19 +104,38 @@ INTERACTIVE="$INTERACTIVE" "$PYTHON_BIN" "$SCRIPT_DIR/preflight_eval_runtime.py"
 source "$RUNTIME_ENV_FILE"
 
 # 解析参数
+PREV_ARG=""
 for arg in "$@"; do
+    if [ "$PREV_ARG" = "--retry-wrong" ]; then
+        RETRY_WRONG="$arg"
+        PREV_ARG=""
+        continue
+    fi
     if [ "$arg" = "--skip-import" ]; then
         SKIP_IMPORT=true
     elif [ "$arg" = "--group-chat" ]; then
         GROUP_CHAT=true
     elif [ "$arg" = "--auto-commit" ]; then
         AUTO_COMMIT=true
+    elif [ "$arg" = "--retry-wrong" ]; then
+        PREV_ARG="$arg"
+        continue
     fi
+    PREV_ARG=""
 done
 
-# 过滤掉开关参数，获取位置参数
+# 过滤掉开关参数和 --retry-wrong 的值，获取位置参数
 ARGS=()
+SKIP_NEXT=false
 for arg in "$@"; do
+    if [ "$SKIP_NEXT" = "true" ]; then
+        SKIP_NEXT=false
+        continue
+    fi
+    if [ "$arg" = "--retry-wrong" ]; then
+        SKIP_NEXT=true
+        continue
+    fi
     if [ "$arg" != "--skip-import" ] && [ "$arg" != "--group-chat" ] && [ "$arg" != "--auto-commit" ]; then
         ARGS+=("$arg")
     fi
@@ -128,6 +150,9 @@ fi
 SAMPLE=${ARGS[0]}
 QUESTION_INDEX=${ARGS[1]}
 INPUT_FILE="$SCRIPT_DIR/../data/locomo10.json"
+
+# Export for inline Python usage
+export SCRIPT_DIR INPUT_FILE RETRY_WRONG ACCOUNT OPENVIKING_URL GROUP_CHAT
 
 # auto-commit 逻辑
 if [ "$AUTO_COMMIT" = "true" ]; then
@@ -176,6 +201,109 @@ if [ -z "$SAMPLE" ]; then
 
     echo ""
     echo "=== 全量评测完成 ==="
+    echo "结果文件: $RESULT_FILE"
+    exit 0
+fi
+
+# ========== 重跑错题模式 ==========
+if [ -n "$RETRY_WRONG" ]; then
+    if [ ! -f "$RETRY_WRONG" ]; then
+        echo "Error: --retry-wrong file not found: $RETRY_WRONG" >&2
+        exit 1
+    fi
+
+    echo "=== 重跑错题模式 ==="
+    echo "源文件: $RETRY_WRONG"
+
+    if [ "$AUTO_COMMIT" = "true" ]; then
+        RESULT_FILE="./result/locomo_retry_${TIMESTAMP}_${GIT_COMMIT_ID}.csv"
+    else
+        RESULT_FILE="./result/locomo_retry_${TIMESTAMP}.csv"
+    fi
+
+    # 从错题 CSV 中提取需要导入的 (sample_index, question_index) 并导入相关对话
+    echo "[1/3] 导入错题相关对话..."
+    "$PYTHON_BIN" - <<PY
+import csv
+import json
+import subprocess
+import sys
+import os
+
+script_dir = os.environ["SCRIPT_DIR"]
+input_file = os.environ["INPUT_FILE"]
+retry_wrong = os.environ["RETRY_WRONG"]
+account = os.environ.get("ACCOUNT", "default")
+ov_url = os.environ.get("OPENVIKING_URL", "http://localhost:1933")
+group_chat = os.environ.get("GROUP_CHAT", "false") == "true"
+
+# Load locomo data for sample index resolution
+with open(input_file, "r", encoding="utf-8") as f:
+    data = json.load(f)
+sample_id_to_index = {f"sample_{i}": i for i in range(len(data))}
+
+# Read wrong questions
+with open(retry_wrong, "r", encoding="utf-8") as f:
+    reader = csv.DictReader(f)
+    wrong_items = []
+    for row in reader:
+        if row.get("is_invalid", "").lower() == "true":
+            continue
+        if row.get("result") == "WRONG":
+            wrong_items.append(row)
+
+print(f"Found {len(wrong_items)} valid wrong questions")
+
+# Group by sample and import
+imported_samples = set()
+for item in wrong_items:
+    sample_id = item["sample_id"]
+    if sample_id in imported_samples:
+        continue
+    sample_index = sample_id_to_index.get(sample_id)
+    if sample_index is None:
+        print(f"Warning: cannot resolve sample index for {sample_id}")
+        continue
+    cmd = [
+        sys.executable, f"{script_dir}/import_to_ov.py",
+        "--input", input_file,
+        "--sample", str(sample_index),
+        "--force-ingest",
+        "--account", account,
+        "--openviking-url", ov_url,
+    ]
+    if group_chat:
+        cmd.append("--group-chat")
+    print(f"  Importing {sample_id} (index={sample_index})...")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"  Warning: import failed for {sample_id}: {result.stderr[:200]}")
+    imported_samples.add(sample_id)
+
+print(f"Imported {len(imported_samples)} samples")
+PY
+
+    echo "等待数据处理完成..."
+    sleep 30
+
+    # 评估错题
+    echo "[2/3] 重新评估错题..."
+    "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" \
+        "$INPUT_FILE" \
+        --output "$RESULT_FILE" \
+        --retry-wrong "$RETRY_WRONG" \
+        --threads 20 \
+        "${COMMON_OPTS[@]}"
+
+    # 裁判打分
+    echo "[3/3] 裁判打分..."
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" --parallel 20
+
+    # 统计结果
+    "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$RESULT_FILE"
+
+    echo ""
+    echo "=== 错题重跑完成 ==="
     echo "结果文件: $RESULT_FILE"
     exit 0
 fi

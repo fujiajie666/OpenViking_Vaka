@@ -375,6 +375,11 @@ def main():
         default=False,
         help="Group-chat mode: pass --memory-user to vikingbot chat. Default is group-chat mode.",
     )
+    parser.add_argument(
+        "--retry-wrong",
+        default=None,
+        help="Path to a judged result CSV. Only re-evaluate valid rows where result=WRONG.",
+    )
     args = parser.parse_args()
 
     # 如果指定了 question-index，自动设置 count=1
@@ -399,6 +404,23 @@ def main():
     else:
         print(f"No errors file found at {errors_path}, is_invalid will be False for all questions")
 
+    # --retry-wrong: 从结果 CSV 中提取有效错题
+    retry_wrong_questions = None
+    if args.retry_wrong:
+        retry_wrong_questions = set()
+        retry_wrong_samples = set()
+        with open(args.retry_wrong, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row.get("is_invalid", "").lower() == "true":
+                    continue
+                if row.get("result") == "WRONG":
+                    retry_wrong_questions.add(row["question"])
+                    retry_wrong_samples.add(row["sample_id"])
+        print(f"[retry-wrong] Found {len(retry_wrong_questions)} valid wrong questions from {args.retry_wrong}")
+        if retry_wrong_samples:
+            print(f"[retry-wrong] Affected samples: {', '.join(sorted(retry_wrong_samples))}")
+
     # 加载QA数据（所有题目，包括无效题目，只标记 is_invalid）
     qa_list = load_locomo_qa(
         args.input,
@@ -408,6 +430,12 @@ def main():
         invalid_questions=invalid_questions,
     )
     total = len(qa_list)
+
+    # --retry-wrong: 只保留错题
+    if retry_wrong_questions is not None:
+        before = len(qa_list)
+        qa_list = [qa for qa in qa_list if qa["question"] in retry_wrong_questions]
+        print(f"[retry-wrong] Filtered {before} -> {len(qa_list)} questions (only wrong ones)")
 
     # 过滤掉 category=5 的问题
     qa_list = [qa for qa in qa_list if str(qa.get("category")) != "5"]

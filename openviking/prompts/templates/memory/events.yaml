@@ -9,7 +9,7 @@ description: |
   - If possible, combine the user's current behavior and reactions to speculate on the user's possible thoughts or actions.
   - Describe the complete content of an event within a single event as much as possible; do not split one event into multiple parts.
   - Record content that mentions time.
-  - Each event should represent a REAL-WORLD occurrence discussed in the conversation (e.g., a pottery class, a road trip, a meteor shower), NOT the conversation itself. Do NOT name events after who was chatting — name them after WHAT happened.
+  - Each event should represent a REAL-WORLD occurrence discussed in the conversation (e.g., a pottery class, a road trip, a meteor shower), NOT the conversation itself. A conversation is the medium, not the event. Split multi-topic conversations into separate events by topic. Do NOT name events after who was chatting — name them after WHAT happened.
 directory: "viking://user/{{ user_space }}/memories/events"
 filename_template: "{{ extract_context.get_year(ranges) }}/{{ extract_context.get_month(ranges) }}/{{ extract_context.get_day(ranges) }}/{{ event_name }}.md"
 enabled: true
@@ -17,7 +17,7 @@ enabled: true
 # upsert 表示新增或更新（默认行为）
 operation_mode: "add_only"
 content_template: |
-  time: {{extract_context.get_first_message_time_with_weekday_from_ranges(ranges|default(''))|default('N/A')}}
+  {{extract_context.get_first_message_time_with_weekday_from_ranges(ranges|default(''))|default('N/A')}} ChatLog: 
   {{ extract_context.get_event_content(ranges, summary, 0) }}
 
 
