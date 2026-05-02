@@ -237,50 +237,48 @@ account = os.environ.get("ACCOUNT", "default")
 ov_url = os.environ.get("OPENVIKING_URL", "http://localhost:1933")
 group_chat = os.environ.get("GROUP_CHAT", "false") == "true"
 
-# Load locomo data for sample index resolution
+# Load locomo data
 with open(input_file, "r", encoding="utf-8") as f:
     data = json.load(f)
 sample_id_to_index = {f"sample_{i}": i for i in range(len(data))}
 
-# Read wrong questions
+# Read wrong questions, collect (sample_index, question_index) with dedup
+wrong_keys = set()
 with open(retry_wrong, "r", encoding="utf-8") as f:
     reader = csv.DictReader(f)
-    wrong_items = []
     for row in reader:
         if row.get("is_invalid", "").lower() == "true":
             continue
         if row.get("result") == "WRONG":
-            wrong_items.append(row)
+            sample_id = row["sample_id"]
+            qi = row.get("question_index", "")
+            sample_index = sample_id_to_index.get(sample_id)
+            if sample_index is not None:
+                wrong_keys.add((sample_index, qi))
 
-print(f"Found {len(wrong_items)} valid wrong questions")
+print(f"Found {len(wrong_keys)} unique wrong questions to import")
 
-# Group by sample and import
-imported_samples = set()
-for item in wrong_items:
-    sample_id = item["sample_id"]
-    if sample_id in imported_samples:
-        continue
-    sample_index = sample_id_to_index.get(sample_id)
-    if sample_index is None:
-        print(f"Warning: cannot resolve sample index for {sample_id}")
-        continue
+# Import one question at a time using --question-index (auto-detects sessions from evidence)
+imported = 0
+for sample_index, qi in sorted(wrong_keys):
     cmd = [
         sys.executable, f"{script_dir}/import_to_ov.py",
         "--input", input_file,
         "--sample", str(sample_index),
+        "--question-index", str(qi),
         "--force-ingest",
         "--account", account,
         "--openviking-url", ov_url,
     ]
     if group_chat:
         cmd.append("--group-chat")
-    print(f"  Importing {sample_id} (index={sample_index})...")
+    print(f"  Importing sample_{sample_index} q{qi}...")
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"  Warning: import failed for {sample_id}: {result.stderr[:200]}")
-    imported_samples.add(sample_id)
+        print(f"  Warning: import failed: {result.stderr[:200]}")
+    imported += 1
 
-print(f"Imported {len(imported_samples)} samples")
+print(f"Imported {imported} question-related sessions")
 PY
 
     echo "等待数据处理完成..."
