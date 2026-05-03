@@ -126,9 +126,18 @@ class ExtractContext:
         # 按 start 排序
         ranges.sort(key=lambda x: x[0])
 
+        # 合并连续/重叠的范围
+        merged = [ranges[0]]
+        for start, end in ranges[1:]:
+            prev_start, prev_end = merged[-1]
+            if start <= prev_end + 1:
+                merged[-1] = (prev_start, max(prev_end, end))
+            else:
+                merged.append((start, end))
+
         # elements 是 List[List[Message]] - 每段连续消息是一个列表
         elements: List[List[Message]] = []
-        for i, (start, end) in enumerate(ranges):
+        for start, end in merged:
             # 兼容 LLM 提取的 range 越界情况
             if start < 0:
                 start = 0
