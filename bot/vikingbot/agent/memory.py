@@ -1,10 +1,11 @@
 """Memory system for persistent agent memory."""
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Any
+
 from loguru import logger
-import time
 
 from vikingbot.config.loader import load_config
 from vikingbot.openviking_mount.ov_server import VikingClient
@@ -161,9 +162,14 @@ class MemoryStore:
                 uri = mem.get('uri', '') if isinstance(mem, dict) else getattr(mem, 'uri', '')
                 score = mem.get('score', 0) if isinstance(mem, dict) else getattr(mem, 'score', 0)
                 memory_list.append(f"{i},{uri},{score}")
-            logger.info(f"[RAW_MEMORIES]\n{'\n'.join(memory_list)}")
-            user_memory = await self._parse_viking_memory(result["user_memory"], client, min_score=0.1, max_chars=4000)
-            agent_memory = await self._parse_viking_memory(result["agent_memory"], client, min_score=0.1, max_chars=2000)
+            raw_memories_log = "\n".join(memory_list)
+            logger.info(f"[RAW_MEMORIES]\n{raw_memories_log}")
+            user_memory = await self._parse_viking_memory(
+                result["user_memory"], client, min_score=0.1, max_chars=4000
+            )
+            agent_memory = await self._parse_viking_memory(
+                result["agent_memory"], client, min_score=0.1, max_chars=2000
+            )
             return f"### user memories:\n{user_memory}\n### agent memories:\n{agent_memory}"
         except Exception as e:
             logger.error(f"[READ_USER_MEMORY]: search error. {e}")
