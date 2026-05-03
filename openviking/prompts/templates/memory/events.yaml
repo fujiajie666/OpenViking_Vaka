@@ -50,7 +50,7 @@ fields:
   - name: ranges
     type: string
     description: |
-      Conversation message index ranges to extract, format: "start-end,start-end,..."
-      Example: "0-3,40-45" means extract messages 0-3 and 40-45.
+      Conversation message index list, format: "i1,i2,i3,..."
+      Example: "0,1,2,3,40,41,42" means extract messages at indices 0,1,2,3,40,41,42.
     merge_op: immutable
 

@@ -624,7 +624,7 @@ class AgentLoop:
             relevant_memories = message_context.latest_relevant_memories
             # logger.info(f"New messages: {json.dumps(messages, indent=4)}")
 
-<            # Run agent loop within a stable response identity for tracing/tool spans.
+            # Run agent loop within a stable response identity for tracing/tool spans.
             response_id = uuid.uuid4().hex
             with set_response_id(response_id):
                 (
