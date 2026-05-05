@@ -203,3 +203,4 @@ specs/
 .codex/
 .ttadk/
 benchmark/vaka/vikingbot/analysis
+benchmark/vaka/vikingbot/result*/

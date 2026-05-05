@@ -197,6 +197,34 @@ async def grade_row(
         return False, f"[JUDGE ERROR] {exc}", mode
 
 
+async def grade_row_ensemble(
+    client: AsyncOpenAI,
+    *,
+    models: list[str],
+    row: dict,
+    response_column: str,
+    max_context_chars: int,
+) -> tuple[bool, str, str]:
+    results = await asyncio.gather(*(
+        grade_row(
+            client,
+            model=m,
+            row=row,
+            response_column=response_column,
+            max_context_chars=max_context_chars,
+        )
+        for m in models
+    ))
+    correct_count = sum(1 for is_correct, _, _ in results if is_correct)
+    mode = results[0][2]
+    if correct_count >= 2:
+        for is_correct, reasoning, _ in results:
+            if is_correct:
+                return True, reasoning, mode
+    wrong_reasonings = [reasoning for is_correct, reasoning, _ in results if not is_correct]
+    return False, "\n\n".join(wrong_reasonings), mode
+
+
 def load_answers(input_path: str) -> tuple[list[dict], list[str]]:
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"Input file not found: {input_path}")
@@ -231,9 +259,10 @@ async def main() -> None:
         help="Judge API token, default from ARK_API_KEY or OPENAI_API_KEY",
     )
     parser.add_argument(
-        "--model",
-        default="ep-20260423162207-qfqr8",
-        help="Judge model name, default: doubao-seed-2-0-pro-260215",
+        "--models",
+        nargs="+",
+        default=["ep-20260423162207-qfqr8", "ep-20260501104936-72vfz", "ep-20260501105042-9kp5v"],
+        help="Judge model names (3-model ensemble, majority vote), default: 3 endpoints",
     )
     parser.add_argument(
         "--parallel", type=int, default=5, help="Parallel judge request count, default: 5"
@@ -302,9 +331,9 @@ async def main() -> None:
                 f"Q{row.get('question_index', '')}"
             )
             print(f"Judging {idx + 1}/{total} {label}: {row.get('question', '')[:60]}...")
-            is_correct, reasoning, mode = await grade_row(
+            is_correct, reasoning, mode = await grade_row_ensemble(
                 client,
-                model=args.model,
+                models=args.models,
                 row=row,
                 response_column=args.response_column,
                 max_context_chars=args.max_context_chars,
