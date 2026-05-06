@@ -229,6 +229,7 @@ class OpenAPIChannel(BaseChannel):
         if msg.event_type == OutboundEventType.RESPONSE:
             # Final response - add to stream first
             pending.set_response_id(msg.response_id)
+            pending.token_usage = msg.token_usage
             pending.relevant_memories = (msg.metadata or {}).get("relevant_memories")
             await pending.add_event(
                 "response",

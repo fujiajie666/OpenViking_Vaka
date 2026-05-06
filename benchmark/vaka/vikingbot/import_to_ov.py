@@ -228,8 +228,8 @@ def _parse_token_usage(commit_result: dict[str, Any]) -> dict[str, int]:
             return {
                 "embedding": embed_total,
                 "vlm": llm_total,
-                "llm_input": llm.get("input", 0),
-                "llm_output": llm.get("output", 0),
+                "llm_input": llm.get("prompt_tokens", llm.get("input", 0)),
+                "llm_output": llm.get("completion_tokens", llm.get("output", 0)),
                 "total": token_usage.get("total", {}).get("total_tokens", embed_total + llm_total),
             }
 
