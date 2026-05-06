@@ -273,8 +273,8 @@ async def main() -> None:
     )
     parser.add_argument(
         "--response-column",
-        default="response_without_ref",
-        help="Column to judge as generated answer, default: response_without_ref",
+        default="response",
+        help="Column to judge as generated answer, default: response",
     )
     parser.add_argument(
         "--max-context-chars",
