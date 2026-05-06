@@ -75,6 +75,10 @@ class ChatResponse(BaseModel):
         default=None,
         description="OpenViking memories assembled during _process_message",
     )
+    token_usage: Dict[str, int] = Field(
+        default_factory=dict,
+        description="Token usage statistics (prompt_tokens, completion_tokens, total_tokens)",
+    )
     timestamp: datetime = Field(default_factory=datetime.now, description="Response timestamp")
 
 

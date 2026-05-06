@@ -27,6 +27,8 @@ FIELDNAMES = [
     "reasoning",
     "retrieved_memories_json",
     "retrieved_memories_text",
+    "response_input_tokens",
+    "response_output_tokens",
 ]
 
 
@@ -209,6 +211,7 @@ async def process_single_qa(
         api_key=api_key,
     )
     response = data.get("message", "")
+    token_usage = data.get("token_usage", {})
     print(f"Completed {orig_idx}/{total_count}, time cost: {round(time_cost, 2)}s")
 
     # 提取召回记忆
@@ -229,6 +232,8 @@ async def process_single_qa(
         "reasoning": "",
         "retrieved_memories_json": memories_json,
         "retrieved_memories_text": memories_text,
+        "response_input_tokens": token_usage.get("prompt_tokens", ""),
+        "response_output_tokens": token_usage.get("completion_tokens", ""),
     }
 
 

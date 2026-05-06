@@ -48,6 +48,7 @@ class PendingResponse:
         self.final_content: Optional[str] = None
         self.response_id: Optional[str] = None
         self.relevant_memories: Optional[str] = None
+        self.token_usage: Dict[str, int] = {}
         self.event = asyncio.Event()
         self.stream_queue: asyncio.Queue[Optional[ChatStreamEvent]] = asyncio.Queue()
 
@@ -202,6 +203,7 @@ class OpenAPIChannel(BaseChannel):
             ):
                 pending.set_response_id(msg.response_id)
                 pending.relevant_memories = (msg.metadata or {}).get("relevant_memories")
+                pending.token_usage = msg.token_usage
                 await pending.add_event(
                     "response",
                     {"content": msg.content or "", "response_id": msg.response_id},
@@ -498,6 +500,7 @@ class OpenAPIChannel(BaseChannel):
                 message=response_content,
                 events=pending.events if pending.events else None,
                 relevant_memories=pending.relevant_memories,
+                token_usage=pending.token_usage,
             )
 
         except HTTPException:
@@ -641,6 +644,7 @@ class OpenAPIChannel(BaseChannel):
                 message=response_content,
                 events=pending.events if pending.events else None,
                 relevant_memories=pending.relevant_memories,
+                token_usage=pending.token_usage,
             )
 
         except HTTPException:

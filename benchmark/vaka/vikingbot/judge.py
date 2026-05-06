@@ -192,9 +192,11 @@ async def grade_row(
         result = extract_json_object(content)
         is_correct = str(result.get("is_correct", "WRONG")).strip().upper() == "CORRECT"
         reasoning = str(result.get("reasoning", "")).strip()
-        return is_correct, reasoning, mode
+        input_tokens = resp.usage.prompt_tokens if resp.usage else 0
+        output_tokens = resp.usage.completion_tokens if resp.usage else 0
+        return is_correct, reasoning, mode, input_tokens, output_tokens
     except Exception as exc:
-        return False, f"[JUDGE ERROR] {exc}", mode
+        return False, f"[JUDGE ERROR] {exc}", mode, 0, 0
 
 
 async def grade_row_ensemble(
@@ -215,14 +217,16 @@ async def grade_row_ensemble(
         )
         for m in models
     ))
-    correct_count = sum(1 for is_correct, _, _ in results if is_correct)
+    correct_count = sum(1 for is_correct, _, _, _, _ in results if is_correct)
     mode = results[0][2]
+    total_input_tokens = sum(inp for _, _, _, inp, _ in results)
+    total_output_tokens = sum(out for _, _, _, _, out in results)
     if correct_count >= 2:
-        for is_correct, reasoning, _ in results:
+        for is_correct, reasoning, _mode, _inp, _out in results:
             if is_correct:
-                return True, reasoning, mode
-    wrong_reasonings = [reasoning for is_correct, reasoning, _ in results if not is_correct]
-    return False, "\n\n".join(wrong_reasonings), mode
+                return True, reasoning, mode, total_input_tokens, total_output_tokens
+    wrong_reasonings = [reasoning for is_correct, reasoning, _, _, _ in results if not is_correct]
+    return False, "\n\n".join(wrong_reasonings), mode, total_input_tokens, total_output_tokens
 
 
 def load_answers(input_path: str) -> tuple[list[dict], list[str]]:
@@ -235,7 +239,7 @@ def load_answers(input_path: str) -> tuple[list[dict], list[str]]:
         fieldnames = list(reader.fieldnames or [])
         rows = list(reader)
 
-    for column in ["result", "reasoning", "judge_mode"]:
+    for column in ["result", "reasoning", "judge_mode", "judge_input_tokens", "judge_output_tokens"]:
         if column not in fieldnames:
             fieldnames.append(column)
     return rows, fieldnames
@@ -331,7 +335,7 @@ async def main() -> None:
                 f"Q{row.get('question_index', '')}"
             )
             print(f"Judging {idx + 1}/{total} {label}: {row.get('question', '')[:60]}...")
-            is_correct, reasoning, mode = await grade_row_ensemble(
+            is_correct, reasoning, mode, judge_input_tokens, judge_output_tokens = await grade_row_ensemble(
                 client,
                 models=args.models,
                 row=row,
@@ -341,6 +345,8 @@ async def main() -> None:
             row["result"] = "CORRECT" if is_correct else "WRONG"
             row["reasoning"] = reasoning
             row["judge_mode"] = mode
+            row["judge_input_tokens"] = str(judge_input_tokens)
+            row["judge_output_tokens"] = str(judge_output_tokens)
             await save_results()
             print(f"Saved {idx + 1}/{total}: {row['result']} ({mode})")
 
