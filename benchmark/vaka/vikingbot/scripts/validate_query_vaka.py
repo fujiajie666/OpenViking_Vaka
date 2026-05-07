@@ -2,6 +2,7 @@
 
 Usage:
     uv run python benchmark/vaka/vikingbot/scripts/validate_query_vaka.py
+    uv run python benchmark/vaka/vikingbot/scripts/validate_query_vaka.py --mode evidence
     uv run python benchmark/vaka/vikingbot/scripts/validate_query_vaka.py --force
     uv run python benchmark/vaka/vikingbot/scripts/validate_query_vaka.py --parallel 3
 """
@@ -215,12 +216,22 @@ async def grade_answer_ensemble(
     correct_count = sum(1 for is_correct, _, _, _ in results if is_correct)
     total_input = sum(inp for _, _, inp, _ in results)
     total_output = sum(out for _, _, _, out in results)
-    if correct_count >= 1:
+    if correct_count >= 2:
         for is_correct, reasoning, _, _ in results:
             if is_correct:
                 return True, reasoning, total_input, total_output, per_model
     wrong_reasonings = [reasoning for is_correct, reasoning, _, _ in results if not is_correct]
     return False, "\n\n".join(wrong_reasonings), total_input, total_output, per_model
+
+
+def build_evidence_map(locomo_rows: list[dict]) -> dict[int, str]:
+    """Build mapping from item_id to complete_evidence_dialogue_with_model."""
+    evidence_map: dict[int, str] = {}
+    for row in locomo_rows:
+        ev = (row.get("complete_evidence_dialogue_with_model") or "").strip()
+        if ev:
+            evidence_map[int(row["item_id"])] = ev
+    return evidence_map
 
 
 def load_locomo(path: str) -> list[dict]:
@@ -262,7 +273,13 @@ async def main() -> None:
         default=["ep-20260423162207-qfqr8", "ep-20260501104936-72vfz", "ep-20260501105042-9kp5v"],
         help="Judge model names (3-model ensemble, majority vote)",
     )
-    parser.add_argument("--parallel", type=int, default=3, help="Parallel request count")
+    parser.add_argument(
+        "--mode",
+        choices=["full", "evidence"],
+        default="full",
+        help="Context mode: 'full' uses all sessions 1-70 as context; 'evidence' uses per-query evidence from locomo complete_evidence_dialogue_with_model column",
+    )
+    parser.add_argument("--parallel", type=int, default=5, help="Parallel request count")
     parser.add_argument(
         "--query-index",
         type=int,
@@ -289,6 +306,11 @@ async def main() -> None:
 
     print("Building conversation context from session_id 1-70...")
     full_context = build_conversation_context(locomo_rows, max_sessions=70)
+
+    evidence_map: dict[int, str] = {}
+    if args.mode == "evidence":
+        evidence_map = build_evidence_map(locomo_rows)
+        print(f"  Loaded {len(evidence_map)} evidence dialogues (item_id 1-{max(evidence_map.keys(), default=0)})")
 
     print("Loading judge queries...")
     judge_rows = load_judge_csv(args.judge_csv)
@@ -377,7 +399,19 @@ async def main() -> None:
             print(f"[{idx + 1}/{len(result_rows)}] Q{qi}: {query[:60]}...")
 
             # Step 1: Generate answer
-            prompt = build_answer_prompt(full_context, query)
+            if args.mode == "evidence":
+                item_id = int(qi) + 1
+                context = evidence_map.get(item_id, "")
+                if not context:
+                    row["generated_answer"] = "[NO EVIDENCE]"
+                    row["is_correct"] = "WRONG"
+                    row["reasoning"] = f"item_id={item_id} not found in evidence_map"
+                    await save_results()
+                    print(f"  -> WRONG | no evidence for item_id={item_id}")
+                    return
+            else:
+                context = full_context
+            prompt = build_answer_prompt(context, query)
             answer, ans_inp, ans_out = await generate_answer(
                 client, model=args.answer_model, prompt=prompt,
             )
