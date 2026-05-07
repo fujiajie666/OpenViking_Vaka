@@ -35,8 +35,8 @@ uv run python benchmark/vaka/vikingbot/scripts/validate_query_vaka.py --query-in
 # 强制重新处理所有 query
 uv run python benchmark/vaka/vikingbot/scripts/validate_query_vaka.py --force
 
-# 自定义并发数和上下文长度
-uv run python benchmark/vaka/vikingbot/scripts/validate_query_vaka.py --parallel 5 --max-context-chars 100000
+# 自定义并发数
+uv run python benchmark/vaka/vikingbot/scripts/validate_query_vaka.py --parallel 5
 
 # 自定义模型
 uv run python benchmark/vaka/vikingbot/scripts/validate_query_vaka.py \
@@ -65,7 +65,10 @@ uv run python benchmark/vaka/vikingbot/scripts/validate_query_vaka.py --output /
 | query | 原始问题 |
 | standard_answer | 标准答案 |
 | generated_answer | 大模型生成的答案 |
-| is_correct | CORRECT 或 WRONG |
+| is_correct | CORRECT 或 WRONG（3 模型 ensemble 结果） |
+| is_correct_doubao | 豆包模型评判结果：CORRECT 或 WRONG |
+| is_correct_glm | GLM 模型评判结果：CORRECT 或 WRONG |
+| is_correct_deepseek | DeepSeek 模型评判结果：CORRECT 或 WRONG |
 | reasoning | 判决理由（中文） |
 | answer_input_tokens | 生成答案的输入 token 数 |
 | answer_output_tokens | 生成答案的输出 token 数 |

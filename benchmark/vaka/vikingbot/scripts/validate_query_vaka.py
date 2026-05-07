@@ -183,6 +183,13 @@ async def grade_answer(
         return False, f"[JUDGE ERROR] {exc}", 0, 0
 
 
+MODEL_LABELS = {
+    "ep-20260423162207-qfqr8": "doubao",
+    "ep-20260501105042-9kp5v": "deepseek",
+    "ep-20260501104936-72vfz": "glm",
+}
+
+
 async def grade_answer_ensemble(
     client: AsyncOpenAI,
     *,
@@ -190,7 +197,7 @@ async def grade_answer_ensemble(
     query: str,
     gold_answer: str,
     generated_answer: str,
-) -> tuple[bool, str, int, int]:
+) -> tuple[bool, str, int, int, dict[str, bool]]:
     results = await asyncio.gather(*(
         grade_answer(
             client,
@@ -201,15 +208,19 @@ async def grade_answer_ensemble(
         )
         for m in models
     ))
+    per_model = {}
+    for m, (is_correct, _, _, _) in zip(models, results):
+        label = MODEL_LABELS.get(m, m)
+        per_model[f"is_correct_{label}"] = is_correct
     correct_count = sum(1 for is_correct, _, _, _ in results if is_correct)
     total_input = sum(inp for _, _, inp, _ in results)
     total_output = sum(out for _, _, _, out in results)
-    if correct_count >= 2:
+    if correct_count >= 1:
         for is_correct, reasoning, _, _ in results:
             if is_correct:
-                return True, reasoning, total_input, total_output
+                return True, reasoning, total_input, total_output, per_model
     wrong_reasonings = [reasoning for is_correct, reasoning, _, _ in results if not is_correct]
-    return False, "\n\n".join(wrong_reasonings), total_input, total_output
+    return False, "\n\n".join(wrong_reasonings), total_input, total_output, per_model
 
 
 def load_locomo(path: str) -> list[dict]:
@@ -286,7 +297,8 @@ async def main() -> None:
     # Load or initialize output
     output_fieldnames = [
         "query_index", "query", "standard_answer", "generated_answer",
-        "is_correct", "reasoning", "answer_input_tokens", "answer_output_tokens",
+        "is_correct", "is_correct_doubao", "is_correct_glm", "is_correct_deepseek",
+        "reasoning", "answer_input_tokens", "answer_output_tokens",
         "judge_input_tokens", "judge_output_tokens",
     ]
     existing_results: dict[int, dict] = {}
@@ -326,6 +338,9 @@ async def main() -> None:
                 "standard_answer": judge_rows[i].get("standard_answer", ""),
                 "generated_answer": "",
                 "is_correct": "",
+                "is_correct_doubao": "",
+                "is_correct_glm": "",
+                "is_correct_deepseek": "",
                 "reasoning": "",
                 "answer_input_tokens": "0",
                 "answer_output_tokens": "0",
@@ -371,7 +386,7 @@ async def main() -> None:
             row["answer_output_tokens"] = str(ans_out)
 
             # Step 2: Grade answer
-            is_correct, reasoning, judge_inp, judge_out = await grade_answer_ensemble(
+            is_correct, reasoning, judge_inp, judge_out, per_model = await grade_answer_ensemble(
                 client,
                 models=args.judge_models,
                 query=query,
@@ -379,6 +394,8 @@ async def main() -> None:
                 generated_answer=answer,
             )
             row["is_correct"] = "CORRECT" if is_correct else "WRONG"
+            for col, val in per_model.items():
+                row[col] = "CORRECT" if val else "WRONG"
             row["reasoning"] = reasoning
             row["judge_input_tokens"] = str(judge_inp)
             row["judge_output_tokens"] = str(judge_out)
