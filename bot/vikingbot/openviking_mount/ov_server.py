@@ -11,6 +11,17 @@ from vikingbot.openviking_mount.user_apikey_manager import UserApiKeyManager
 
 viking_resource_prefix = "viking://resources/"
 
+MEMORY_CONSOLIDATION_GUIDANCE = """Memory consolidation guidance:
+Extract durable, searchable memory from the conversation. Prefer evidence-backed reusable rules over vague summaries.
+
+When a user states or corrects a preference, preserve:
+- scope: general, project-specific, document-specific, role/audience-specific, time-bounded, or current-turn-only
+- positive requirements and negative constraints
+- names of files, artifacts, workstreams, roles, audiences, fields, dates, and user phrases that make the memory easy to retrieve later
+- unresolved items, exceptions, missing inputs, and the rule for handling ambiguity
+
+Do not turn a one-off instruction into a permanent preference unless the conversation clearly supports it. Do not store this guidance itself as memory."""
+
 
 class VikingClient:
     def __init__(self, agent_id: Optional[str] = None):
@@ -394,6 +405,15 @@ class VikingClient:
         create_res = await client.create_session()
         session_id = create_res["session_id"]
         session = client.session(session_id)
+
+        try:
+            await session.add_message(
+                role="system",
+                parts=[TextPart(text=MEMORY_CONSOLIDATION_GUIDANCE)],
+                created_at=None,
+            )
+        except Exception as exc:
+            logger.warning(f"Failed to add memory consolidation guidance: {exc}")
 
         for message in messages:
             role = message.get("role")
