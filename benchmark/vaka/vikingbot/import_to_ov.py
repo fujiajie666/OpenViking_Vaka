@@ -244,18 +244,52 @@ def _parse_token_usage(commit_result: dict[str, Any]) -> dict[str, int]:
     }
 
 
+def _parse_tool_parts(row: dict[str, Any]) -> list[dict[str, Any]]:
+    tools_raw = row.get("tools") or ""
+    if isinstance(tools_raw, str):
+        tools_raw = tools_raw.strip()
+        if not tools_raw:
+            return []
+        try:
+            tools = json.loads(tools_raw)
+        except json.JSONDecodeError:
+            return []
+    elif isinstance(tools_raw, list):
+        tools = tools_raw
+    else:
+        return []
+    parts: list[dict[str, Any]] = []
+    for tool in tools:
+        if not isinstance(tool, dict) or tool.get("type") != "tool":
+            continue
+        part: dict[str, Any] = {
+            "type": "tool",
+            "tool_id": tool.get("tool_id", ""),
+            "tool_name": tool.get("tool_name", ""),
+            "tool_uri": tool.get("tool_uri", ""),
+            "skill_uri": tool.get("skill_uri", ""),
+            "tool_input": tool.get("tool_input"),
+            "tool_output": str(tool.get("tool_output", "")) if tool.get("tool_output") is not None else "",
+            "tool_status": tool.get("tool_status", "completed"),
+        }
+        if tool.get("duration_ms") is not None:
+            part["duration_ms"] = tool["duration_ms"]
+        parts.append(part)
+    return parts
+
+
 def build_session_messages(
     rows: list[dict[str, Any]],
     *,
     answer_column: str,
     keep_references: bool,
-) -> list[dict[str, str | None]]:
-    messages: list[dict[str, str | None]] = []
+) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
     for row in rows:
         created_at = (row.get("created_at") or "").strip() or None
         query = (row.get("query") or "").strip()
         if query:
-            msg: dict[str, str | None] = {"role": "user", "text": query}
+            msg: dict[str, Any] = {"role": "user", "text": query}
             if created_at:
                 msg["created_at"] = created_at
             messages.append(msg)
@@ -263,8 +297,13 @@ def build_session_messages(
         response = choose_response(row, answer_column)
         if not keep_references:
             response = choose_response_without_refs(row, response)
-        if response:
-            msg = {"role": "assistant", "text": response}
+        tool_parts = _parse_tool_parts(row)
+        if response or tool_parts:
+            parts: list[dict[str, Any]] = []
+            if response:
+                parts.append({"type": "text", "text": response})
+            parts.extend(tool_parts)
+            msg = {"role": "assistant", "parts": parts}
             if created_at:
                 msg["created_at"] = created_at
             messages.append(msg)
@@ -348,7 +387,7 @@ def build_merged_case_session(
 
 
 async def viking_ingest(
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     *,
     openviking_url: str,
     account: str | None,
@@ -371,10 +410,14 @@ async def viking_ingest(
         create_res = await client.create_session()
         session_id = create_res["session_id"]
         for msg in messages:
+            if "parts" in msg:
+                parts = msg["parts"]
+            else:
+                parts = [{"type": "text", "text": msg["text"]}]
             await client.add_message(
                 session_id=session_id,
                 role=msg["role"],
-                parts=[{"type": "text", "text": msg["text"]}],
+                parts=parts,
                 created_at=msg.get("created_at"),
             )
 

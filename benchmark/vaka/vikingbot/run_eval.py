@@ -205,7 +205,7 @@ async def process_single_qa(
     print(f"Processing {orig_idx}/{total_count}: {question[:60]}...")
 
     # 8. 每个问题使用独立 session，避免上下文干扰
-    session_id = f"vaka_eval_qa_05{orig_idx}"
+    session_id = f"vaka_eval_qa_06{orig_idx}"
     data, time_cost = await chat_with_bot(
         question_for_bot,
         openviking_url=openviking_url,
