@@ -11,6 +11,7 @@ import os
 from typing import TYPE_CHECKING, Any, Dict, List
 
 from openviking.core.namespace import to_user_space, to_agent_space
+from openviking.message.part import ToolPart
 from openviking.server.identity import RequestContext, ToolContext
 from openviking.session.memory.dataclass import MemoryFileContent
 from openviking.session.memory.utils.uri import render_template
@@ -82,10 +83,16 @@ class SessionExtractContextProvider(ExtractContextProvider):
 
     def _detect_language(self) -> str:
         """检测输出语言"""
-        from openviking.session.memory.utils import resolve_output_language_from_conversation
+        from openviking.message.part import TextPart
+        from openviking.session.memory.utils import resolve_output_language
 
-        conversation = self._assemble_conversation(self.messages)
-        return resolve_output_language_from_conversation(conversation)
+        text_parts = []
+        for message in self.messages or []:
+            for part in getattr(message, "parts", []):
+                if isinstance(part, TextPart) and part.text:
+                    text_parts.append(part.text)
+
+        return resolve_output_language("\n".join(text_parts))
 
     def instruction(self) -> str:
         output_language = self._output_language
@@ -165,10 +172,25 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         conversation_sections: List[str] = []
 
         def format_message_with_parts(msg: Message) -> str:
-            """Format message with text parts only, skipping tool call details."""
+            """Format message with text parts and ToolCall details."""
             parts = getattr(msg, "parts", [])
-            text_lines = [part.text for part in parts if hasattr(part, "text") and part.text]
-            return "\n".join(text_lines) if text_lines else msg.content
+            formatted_parts: List[str] = []
+            for part in parts:
+                if hasattr(part, "text") and part.text:
+                    formatted_parts.append(part.text)
+                elif isinstance(part, ToolPart):
+                    tool_info = {
+                        "type": "tool_call",
+                        "tool_name": part.tool_name,
+                        "tool_input": part.tool_input,
+                        "tool_output": part.tool_output[:500] if part.tool_output else "",
+                        "tool_status": part.tool_status,
+                        "duration_ms": part.duration_ms,
+                    }
+                    if part.skill_uri:
+                        tool_info["skill_name"] = part.skill_uri.rstrip("/").split("/")[-1]
+                    formatted_parts.append(f"[ToolCall] {json.dumps(tool_info, ensure_ascii=False)}")
+            return "\n".join(formatted_parts) if formatted_parts else msg.content
 
         def format_message_header(msg: Message, idx: int) -> str:
             """Format message header with role and role_id."""
@@ -208,8 +230,11 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         pre_fetch_messages = []
         pre_fetch_messages.append(self._build_conversation_message())
 
-        # 触发 registry 加载
-        schemas = self._get_registry().list_all(include_disabled=False)
+        # 触发 registry 加载，过滤掉 agent_only 的 schema（trajectory/experience 只由 agent memory 处理）
+        schemas = [
+            s for s in self._get_registry().list_all(include_disabled=False)
+            if not getattr(s, "agent_only", False)
+        ]
 
         from openviking.server.identity import ToolContext
 
@@ -347,7 +372,10 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
     def get_memory_schemas(self, ctx: RequestContext) -> List[Any]:
         """获取需要参与的 memory schemas（内部自动加载）"""
-        return self._get_registry().list_all(include_disabled=False)
+        return [
+            s for s in self._get_registry().list_all(include_disabled=False)
+            if not getattr(s, "agent_only", False)
+        ]
 
     def get_schema_directories(self) -> List[str]:
         """返回需要加载的 schema 目录"""

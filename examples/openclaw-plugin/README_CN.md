@@ -1,14 +1,55 @@
-# OpenClaw + OpenViking 上下文引擎插件
+# @openclaw/openviking — OpenViking OpenClaw 插件
 
-使用 [OpenViking](https://github.com/volcengine/OpenViking) 作为 [OpenClaw](https://github.com/openclaw/openclaw) 的长期记忆后端。在 OpenClaw 中，此插件注册为 `openviking` 上下文引擎。
+OpenClaw 上下文引擎插件，用于接入 OpenViking 远程记忆、上下文数据库、RAG 和语义检索。
 
-本文档不是安装教程，而是面向集成方和工程师的"当前实现设计说明"。它基于 `examples/openclaw-plugin` 里的现有代码，重点解释这套插件今天实际上如何工作，而不是未来可能的重构方向。
+## 重要：插件 vs Skill 区分
+
+本页面是 **OpenClaw 插件包**：
+
+```
+@openclaw/openviking
+```
+
+**不要** 使用 `clawhub install openviking` 安装插件——那安装的是 `openviking` AgentSkill（`skills/openviking` 下的技能描述），不是本插件。
+
+如需 **Agent 辅助安装插件**，让 agent 按 [INSTALL-AGENT.md](./INSTALL-AGENT.md) 执行。主安装方式仍然是 `openclaw plugins install @openclaw/openviking`。
+
+## 安装（自然语言）
+
+对你的 agent 说：
+
+> 帮我安装 OpenViking 远程记忆插件 @openclaw/openviking。我的服务器地址是 `http://my-server:1933`，API key 是 `sk-xxx`。
+
+Agent 会自动完成安装 → 配置 → 重启 → 验证，无需手动操作。
+
+## 安装（命令行）
+
+```bash
+openclaw plugins install @openclaw/openviking
+openclaw openviking setup --base-url http://my-server:1933 --api-key sk-xxx --json
+openclaw gateway restart
+openclaw openviking status --json
+```
+
+`setup` 命令会自动激活 context-engine slot 并验证服务器连接。
+
+## 搜索关键词
+
+@openclaw/openviking, openclaw openviking 插件, openviking 远程记忆插件, OpenViking 上下文数据库插件, install-openviking-memory
 
 ## 文档入口
 
 - 安装与升级：[INSTALL-ZH.md](./INSTALL-ZH.md)
 - English install guide: [INSTALL.md](./INSTALL.md)
 - Agent 专用操作文档：[INSTALL-AGENT.md](./INSTALL-AGENT.md)
+
+---
+
+## 技术概述
+
+使用 [OpenViking](https://github.com/volcengine/OpenViking) 作为 [OpenClaw](https://github.com/openclaw/openclaw) 的长期记忆后端。在 OpenClaw 中，此插件注册为 `openviking` 上下文引擎。
+
+以下内容是面向集成方和工程师的实现设计说明。
 
 ## 设计定位
 
@@ -159,7 +200,7 @@ preflight 阶段的 `assemble()` 并不是简单地把旧聊天记录塞回来�
 - `memory_forget`：按 URI 删除，或先搜索再删除唯一高置信候选
 - `ov_archive_expand`：展开某个 archive 的原始消息
 - `ov_import`：导入 resource 或 skill；默认 resource，导入 skill 时使用 `kind: "skill"`
-- `ov_search`：检索 OpenViking resources 和 skills，尤其用于导入后的确认和消费
+- `memory_search`：检索 OpenViking resources 和 skills，尤其用于导入后的确认和消费
 
 它们各自的作用不同：
 
@@ -168,7 +209,7 @@ preflight 阶段的 `assemble()` 并不是简单地把旧聊天记录塞回来�
 - `memory_store` 适合把一段明确的重要信息立刻落入记忆管线。
 - `ov_archive_expand` 负责在 summary 不够细时回到 archive 级原文。
 - `ov_import` 让 agent 在用户明确提出导入需求时直接完成操作，不要求用户记住 slash command。
-- `ov_search` 补齐导入后的使用闭环，让用户或 agent 可以确认并消费 resources 和 skills。
+- `memory_search` 补齐导入后的使用闭环，让用户或 agent 可以确认并消费 resources 和 skills。
 
 其中 `ov_archive_expand` 是 `assemble()` 的重要补充，因为 `assemble()` 默认给的是压缩后的索引和摘要，而不是完整历史正文。
 
@@ -184,8 +225,8 @@ Resource 和 skill 保持两个入口，因为它们落在不同 OpenViking 命�
 ```text
 /ov-import ./README.md --to viking://resources/openviking-readme --wait
 /ov-import ./skills/install-openviking-memory --kind skill --wait
-/ov-search "OpenViking install" --uri viking://resources/openviking-readme
-/ov-search "memory install skill" --uri viking://agent/skills
+/memory-search "OpenViking install" --uri viking://resources/openviking-readme
+/memory-search "memory install skill" --uri viking://agent/skills
 ```
 
 Resource 导入支持远程 URL、Git URL、本地文件、本地目录和 zip。OpenViking 内置 parser 覆盖常见文档和媒体类型，例如 Markdown、纯文本、PDF、HTML、Word、PowerPoint、Excel、EPUB、图片、音频和视频。目录导入还支持常见代码、文档和配置扩展名，例如 `.py`、`.js`、`.ts`、`.go`、`.rs`、`.java`、`.cpp`、`.json`、`.yaml`、`.toml`、`.csv`、`.rst`、`.proto`、`.tf`、`.vue`。
@@ -200,7 +241,7 @@ Resource 导入支持远程 URL、Git URL、本地文件、本地目录和 zip�
 
 - `baseUrl` 和可选 `apiKey` 由插件配置提供
 - 不会启动或管理本地子进程
-- session context、memory find/read、commit、archive expand 这些行为保持不变
+- session context、memory search/read、commit、archive expand 这些行为保持不变
 
 OpenViking 服务需要独立部署并运行，插件才能连接到它。
 
@@ -223,7 +264,8 @@ OpenViking 服务需要独立部署并运行，插件才能连接到它。
 ### 查看当前配置
 
 ```bash
-ov-install --current-version
+openclaw openviking status --json
+openclaw plugins list
 openclaw config get plugins.entries.openviking.config
 openclaw config get plugins.slots.contextEngine
 ```

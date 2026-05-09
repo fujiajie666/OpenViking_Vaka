@@ -132,7 +132,9 @@ client.initialize()
 #### HTTP Call Examples
 
 - CLI, `SyncHTTPClient`, and `AsyncHTTPClient` automatically upload local files or directories before calling the server API.
+- Python HTTP client and CLI can also opt into shared temporary uploads via client config (`ovcli.conf` -> `upload.mode = "shared"`).
 - Raw HTTP calls don't get this convenience layer. When using `curl` or other HTTP clients, you need to first call `POST /api/v1/resources/temp_upload`, then pass the returned `temp_file_id` to the target API.
+- `temp_upload` defaults to `upload_mode=local`. Use `upload_mode=shared` only when you explicitly want distributed shared temporary uploads.
 - For raw HTTP imports of local directories, you need to first zip them into a `.zip` file and upload using the above method; the server does not accept direct host directory paths.
 - `POST /api/v1/resources` can directly accept remote URLs, but does not accept host local paths like `./doc.md` or `/tmp/doc.md`.
 
@@ -382,7 +384,7 @@ Below are all HTTP API endpoints provided by OpenViking, grouped by functional m
 | GET | `/api/v1/content/overview` | Read overview (L1) |
 | GET | `/api/v1/content/download` | Download raw file bytes |
 | POST | `/api/v1/content/write` | Update an existing file and refresh semantics/vectors |
-| POST | `/api/v1/content/reindex` | Rebuild semantic/vector index for existing content (deprecated, use maintenance) |
+| POST | `/api/v1/content/reindex` | Rebuild semantic/vector index for existing content |
 
 ### Search
 
@@ -453,12 +455,6 @@ Below are all HTTP API endpoints provided by OpenViking, grouped by functional m
 | GET | `/api/v1/debug/health` | Quick health check |
 | GET | `/api/v1/debug/vector/scroll` | Paginated vector record inspection |
 | GET | `/api/v1/debug/vector/count` | Count vector records |
-
-### Maintenance
-
-| Method | Path | Description | Permission |
-|--------|------|-------------|------------|
-| POST | `/api/v1/maintenance/reindex` | Reindex content (optional abstract regeneration) | ROOT/ADMIN |
 
 ### Statistics
 
