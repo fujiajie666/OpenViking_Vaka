@@ -21,6 +21,7 @@ FIELDNAMES = [
     "question_index",
     "question",
     "standard_answer",
+    "reference_answer",
     "response",
     "response_input_tokens",
     "response_output_tokens",
@@ -46,6 +47,7 @@ def load_qa_from_csv(input_path: str, count: int | None = None) -> list[dict]:
                 {
                     "question": question,
                     "standard_answer": (row.get("standard_answer") or "").strip(),
+                    "reference_answer": (row.get("reference_answer") or "").strip(),
                 }
             )
     if count is not None:
@@ -202,6 +204,7 @@ async def process_single_qa(
     #     + "优先给结论，再给必要依据；不要泛泛展开无关原则。"
     # )
     standard_answer = qa_item.get("standard_answer", "")
+    reference_answer = qa_item.get("reference_answer", "")
     print(f"Processing {orig_idx}/{total_count}: {question[:60]}...")
 
     # 8. 每个问题使用独立 session，避免上下文干扰
@@ -230,6 +233,7 @@ async def process_single_qa(
         "question_index": orig_idx,
         "question": question,
         "standard_answer": standard_answer,
+        "reference_answer": reference_answer,
         "response": response,
         "time_cost": round(time_cost, 2),
         "result": "",
