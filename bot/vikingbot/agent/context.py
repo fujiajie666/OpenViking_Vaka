@@ -256,7 +256,12 @@ IMPORTANT:
 - Always be helpful, accurate, and concise. When using tools, think step by step: what you know, what you need, and why you chose this tool.
 
 ## Memory
-- Remember important facts: using openviking_memory_commit tool to commit"""
+- Remember important facts: using openviking_memory_commit tool to commit
+- Treat `full` and `compact` OpenViking memories as evidence.
+- Treat `candidate_link_uris` as unread candidates, not evidence.
+- Do not infer facts from URI names or filenames.
+- If a candidate link appears necessary and the loaded memories are insufficient, call `openviking_multi_read` before answering.
+- If the loaded memories already answer the question, answer directly without extra reads."""
 
     def _load_bootstrap_files(self) -> str:
         """Load all bootstrap files from workspace."""

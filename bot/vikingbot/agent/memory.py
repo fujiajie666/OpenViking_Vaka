@@ -1,6 +1,7 @@
 """Memory system for persistent agent memory."""
 
 import asyncio
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -25,8 +26,56 @@ class MemoryStore:
             return self.memory_file.read_text(encoding="utf-8")
         return ""
 
+    def _pick_relevant_excerpt(self, text: str, query: str, max_chars: int) -> str:
+        text = re.sub(r"\s+", " ", text).strip()
+        if len(text) <= max_chars:
+            return text
+        if max_chars <= 0:
+            return ""
+
+        terms = re.findall(
+            r"[A-Za-z][A-Za-z0-9_./-]{2,}|\d+(?:[./-]\d+)*|[\u4e00-\u9fff]{2,18}",
+            query,
+        )
+
+        lowered = text.lower()
+        window = max_chars
+        candidate_starts = {0}
+        seen_terms = []
+        for term in (t.strip() for t in terms):
+            if len(term) < 2 or term in seen_terms:
+                continue
+            seen_terms.append(term)
+            needle = term.lower()
+            start = lowered.find(needle)
+            while start != -1 and len(candidate_starts) < 80:
+                candidate_starts.add(max(0, start - window // 3))
+                start = lowered.find(needle, start + max(1, len(needle)))
+
+        best_start = 0
+        best_score = -1
+        for start in candidate_starts:
+            chunk = lowered[start:start + window]
+            score = sum(1 for term in seen_terms[:32] if term.lower() in chunk)
+            if score > best_score:
+                best_start = start
+                best_score = score
+
+        excerpt = text[best_start:best_start + window].strip()
+        if best_start > 0:
+            excerpt = "..." + excerpt
+        if best_start + window < len(text):
+            excerpt += "..."
+        return excerpt
+
     async def _parse_viking_memory(
-        self, result: Any, client: Any, min_score: float = 0.3, max_chars: int = 4000, max_count: int = 12
+        self,
+        result: Any,
+        client: Any,
+        min_score: float = 0.3,
+        max_chars: int = 6000,
+        max_count: int = 12,
+        current_message: str = "",
     ) -> str:
         """Parse viking memory with score filtering and character limit.
         Automatically reads full content for memories above threshold.
@@ -37,6 +86,7 @@ class MemoryStore:
             min_score: Minimum score threshold (default: 0.4)
             max_chars: Maximum character limit for output (default: 4000)
             max_count: Maximum number of memories to return (default: 12)
+            current_message: User message used to select relevant excerpts from long memories
 
         Returns:
             Formatted memory string within character limit
@@ -60,8 +110,45 @@ class MemoryStore:
         user_memories = []
         total_chars = 0
         seen_content_hashes = set()
+        link_candidates: list[tuple[str, Any]] = []
+        max_link_candidates = 5
+        max_full_content_chars = 4000 if max_chars <= 4000 else 5000
+        compact_content_chars = 2000 if max_chars <= 4000 else 3000
 
-        for idx, memory in enumerate(filtered_memories, start=1):
+        def build_memory_str(index: int, memory_type: str, body_tag: str = "", body: str = "") -> str:
+            lines = [
+                f'<memory index="{index}" type="{memory_type}">',
+                f"  <uri>{uri}</uri>",
+                f"  <score>{score}</score>",
+            ]
+            if body_tag:
+                lines.append(f"  <{body_tag}>{body}</{body_tag}>")
+            lines.append("</memory>")
+            return "\n".join(lines)
+
+        def append_memory(memory_str: str) -> bool:
+            nonlocal total_chars
+            memory_chars = len(memory_str) + (1 if user_memories else 0)
+            if total_chars + memory_chars > max_chars:
+                return False
+            user_memories.append(memory_str)
+            total_chars += memory_chars
+            return True
+
+        def append_compact(index: int, body_tag: str, body: str) -> bool:
+            empty_compact = build_memory_str(index, "compact", body_tag, "")
+            available_body_chars = max_chars - total_chars - (1 if user_memories else 0) - len(empty_compact)
+            if available_body_chars <= 80:
+                return False
+            excerpt = self._pick_relevant_excerpt(
+                body, current_message, min(compact_content_chars, available_body_chars)
+            )
+            return append_memory(build_memory_str(index, "compact", body_tag, excerpt))
+
+        for memory in filtered_memories:
+            if len(user_memories) >= max_count:
+                break
+
             uri = get_uri(memory)
             abstract = get_abstract(memory)
             score = get_score(memory)
@@ -81,46 +168,39 @@ class MemoryStore:
             if content_to_hash:
                 seen_content_hashes.add(content_hash)
 
+            memory_index = len(user_memories) + 1
             if content:
-                # Try full version first (no abstract when content is present)
-                full_memory_str = (
-                    f'<memory index="{idx}" type="full">\n'
-                    f"  <uri>{uri}</uri>\n"
-                    f"  <score>{score}</score>\n"
-                    f"  <content>{content}</content>\n"
-                    f"</memory>"
-                )
-                full_chars = len(full_memory_str)
-                if user_memories:
-                    full_chars += 1
+                # Try full version first for short memories (no abstract when content is present)
+                if len(content) <= max_full_content_chars:
+                    full_memory_str = build_memory_str(memory_index, "full", "content", content)
+                    if append_memory(full_memory_str):
+                        continue
 
-                if total_chars + full_chars <= max_chars:
-                    user_memories.append(full_memory_str)
-                    total_chars += full_chars
-                else:
-                    # Full version too big, use link-only version (always add)
-                    link_only_str = (
-                        f'<memory index="{idx}" type="link">\n'
-                        f"  <uri>{uri}</uri>\n"
-                        f"  <score>{score}</score>\n"
-                        f"</memory>"
-                    )
-                    user_memories.append(link_only_str)
-                    # Don't count link-only towards max_chars
+                if append_compact(memory_index, "abstract" if abstract else "content", abstract or content):
+                    continue
+            elif abstract:
+                if append_compact(memory_index, "abstract", abstract):
+                    continue
             else:
-                # No content available, use link-only version (always add)
-                logger.info(f"Using link-only for {uri} (read failed or empty)")
-                memory_str = (
-                    f'<memory index="{idx}" type="link">\n'
-                    f"  <uri>{uri}</uri>\n"
-                    f"  <score>{score}</score>\n"
-                    f"</memory>"
-                )
+                # No content available, use link-only version only within the same caps
+                # Keep unread links out of the main evidence block; expose only a few as read candidates.
+                logger.info(f"Collecting link-only candidate for {uri} (read failed or empty)")
+                if len(link_candidates) < max_link_candidates:
+                    link_candidates.append((uri, score))
+                continue
+            break
 
-                user_memories.append(memory_str)
-                # Don't count link-only towards max_chars
-
-        return "\n".join(user_memories)
+        parts = ["\n".join(user_memories)] if user_memories else []
+        if link_candidates:
+            lines = [
+                "### candidate_link_uris",
+                "These URIs were retrieved but not loaded. They are not evidence.",
+                "If one looks necessary for the user question, call openviking_multi_read before using it.",
+            ]
+            for uri, score in link_candidates:
+                lines.append(f"- {uri} (score={score})")
+            parts.append("\n".join(lines))
+        return "\n\n".join(parts)
 
     def write_long_term(self, content: str) -> None:
         self.memory_file.write_text(content, encoding="utf-8")
@@ -167,10 +247,10 @@ class MemoryStore:
             raw_memories_log = "\n".join(memory_list)
             logger.info(f"[RAW_MEMORIES]\n{raw_memories_log}")
             user_memory = await self._parse_viking_memory(
-                result["user_memory"], client, min_score=0.1, max_chars=4000
+                result["user_memory"], client, min_score=0.1, max_chars=4000, current_message=current_message
             )
             agent_memory = await self._parse_viking_memory(
-                result["agent_memory"], client, min_score=0.1, max_chars=2000
+                result["agent_memory"], client, min_score=0.1, max_chars=2000, current_message=current_message
             )
             return f"### user memories:\n{user_memory}\n### agent memories:\n{agent_memory}"
         except Exception as e:

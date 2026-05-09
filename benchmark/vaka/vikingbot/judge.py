@@ -16,9 +16,10 @@ except ImportError:
         return False
 
 try:
-    from openai import AsyncOpenAI
+    from openai import AsyncOpenAI, AsyncAzureOpenAI
 except ImportError:
     AsyncOpenAI = None
+    AsyncAzureOpenAI = None
 
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -254,19 +255,30 @@ async def main() -> None:
     )
     parser.add_argument(
         "--base-url",
-        default="https://ark.cn-beijing.volces.com/api/v3",
-        help="OpenAI-compatible judge API base URL",
+        default=None,
+        help="API base URL. Default: https://ark.cn-beijing.volces.com/api/v3 (ensemble) or https://aidp.bytedance.net/api/modelhub/online/v2/crawl (single)",
     )
     parser.add_argument(
         "--token",
-        default=os.getenv("ARK_API_KEY", os.getenv("OPENAI_API_KEY", "")),
-        help="Judge API token, default from ARK_API_KEY or OPENAI_API_KEY",
+        default=None,
+        help="Judge API token. Default from ARK_API_KEY or OPENAI_API_KEY (ensemble) / AZURE_OPENAI_API_KEY (single)",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["ensemble", "single"],
+        default="ensemble",
+        help="Judge mode: 'ensemble' for 3-model majority vote, 'single' for single judge (default: ensemble)",
     )
     parser.add_argument(
         "--models",
         nargs="+",
         default=["ep-20260423162207-qfqr8", "ep-20260501104936-72vfz", "ep-20260501105042-9kp5v"],
         help="Judge model names (3-model ensemble, majority vote), default: 3 endpoints",
+    )
+    parser.add_argument(
+        "--azure-api-version",
+        default="2024-03-01-preview",
+        help="Azure OpenAI API version, used in single mode (default: 2024-03-01-preview)",
     )
     parser.add_argument(
         "--parallel", type=int, default=5, help="Parallel judge request count, default: 5"
@@ -283,19 +295,45 @@ async def main() -> None:
         help="Maximum characters for memory context and eval history each, default: 20000",
     )
     parser.add_argument(
+        "--query-index",
+        type=int,
+        default=None,
+        help="Only judge the row at this 0-based index in the CSV",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Re-judge rows even when result is already present",
     )
     args = parser.parse_args()
 
+    # Resolve defaults based on mode
+    if args.mode == "single":
+        if args.base_url is None:
+            args.base_url = "https://aidp.bytedance.net/api/modelhub/online/v2/crawl"
+        if args.token is None:
+            args.token = os.getenv("AZURE_OPENAI_API_KEY", os.getenv("ARK_API_KEY", os.getenv("OPENAI_API_KEY", "")))
+        if not args.models or args.models == ["ep-20260423162207-qfqr8", "ep-20260501104936-72vfz", "ep-20260501105042-9kp5v"]:
+            args.models = ["gpt-5.4-2026-03-05"]
+    else:
+        if args.base_url is None:
+            args.base_url = "https://ark.cn-beijing.volces.com/api/v3"
+        if args.token is None:
+            args.token = os.getenv("ARK_API_KEY", os.getenv("OPENAI_API_KEY", ""))
+
     if not args.token:
         print("Error: API token is required")
         print("\n请通过以下方式设置 API key:")
-        print("  1. 创建 ~/.openviking_benchmark_env 文件，内容如下:")
-        print("     ARK_API_KEY=你的key")
-        print("  2. 或者通过 --token 参数传入")
-        print("  3. 或者设置环境变量: export ARK_API_KEY=你的key")
+        if args.mode == "single":
+            print("  1. 创建 ~/.openviking_benchmark_env 文件，内容如下:")
+            print("     AZURE_OPENAI_API_KEY=你的key")
+            print("  2. 或者通过 --token 参数传入")
+            print("  3. 或者设置环境变量: export AZURE_OPENAI_API_KEY=你的key")
+        else:
+            print("  1. 创建 ~/.openviking_benchmark_env 文件，内容如下:")
+            print("     ARK_API_KEY=你的key")
+            print("  2. 或者通过 --token 参数传入")
+            print("  3. 或者设置环境变量: export ARK_API_KEY=你的key")
         raise SystemExit(1)
 
     if AsyncOpenAI is None:
@@ -308,13 +346,31 @@ async def main() -> None:
     target_indexes = [
         i for i, row in enumerate(rows) if args.force or not (row.get("result") or "").strip()
     ]
+    if args.query_index is not None:
+        if args.query_index < 0 or args.query_index >= total:
+            print(f"Error: --query-index {args.query_index} out of range (0-{total - 1})")
+            raise SystemExit(1)
+        target_indexes = [i for i in target_indexes if i == args.query_index]
+        if not target_indexes:
+            target_indexes = [args.query_index]
     print(f"Total answers: {total}, to judge: {len(target_indexes)}")
 
     if not target_indexes:
         print("All answers already judged, exit")
         return
 
-    client = AsyncOpenAI(base_url=args.base_url, api_key=args.token)
+    if args.mode == "single":
+        if AsyncAzureOpenAI is None:
+            print("Error: openai package is required to run the judge in single mode.")
+            print("请使用项目环境运行，例如: uv run python benchmark/vaka/vikingbot/judge.py")
+            raise SystemExit(1)
+        client = AsyncAzureOpenAI(
+            azure_endpoint=args.base_url,
+            api_key=args.token,
+            api_version=args.azure_api_version,
+        )
+    else:
+        client = AsyncOpenAI(base_url=args.base_url, api_key=args.token)
     semaphore = asyncio.Semaphore(args.parallel)
     file_lock = asyncio.Lock()
 
@@ -335,13 +391,23 @@ async def main() -> None:
                 f"Q{row.get('question_index', '')}"
             )
             print(f"Judging {idx + 1}/{total} {label}: {row.get('question', '')[:60]}...")
-            is_correct, reasoning, mode, judge_input_tokens, judge_output_tokens = await grade_row_ensemble(
-                client,
-                models=args.models,
-                row=row,
-                response_column=args.response_column,
-                max_context_chars=args.max_context_chars,
-            )
+            if args.mode == "single":
+                single_model = args.models[0] if args.models else "gpt-5.4-2026-03-05"
+                is_correct, reasoning, mode, judge_input_tokens, judge_output_tokens = await grade_row(
+                    client,
+                    model=single_model,
+                    row=row,
+                    response_column=args.response_column,
+                    max_context_chars=args.max_context_chars,
+                )
+            else:
+                is_correct, reasoning, mode, judge_input_tokens, judge_output_tokens = await grade_row_ensemble(
+                    client,
+                    models=args.models,
+                    row=row,
+                    response_column=args.response_column,
+                    max_context_chars=args.max_context_chars,
+                )
             row["result"] = "CORRECT" if is_correct else "WRONG"
             row["reasoning"] = reasoning
             row["judge_mode"] = mode

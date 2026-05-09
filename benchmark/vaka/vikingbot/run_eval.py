@@ -196,18 +196,18 @@ async def process_single_qa(
 ) -> dict:
     """处理单个 QA：调用 /bot/v1/chat 生成回答"""
     question = qa_item["question"]
-    question_for_bot = (
-        question
-        + "\n\n请基于已召回的 OpenViking 记忆直接回答。"
-        + "优先给结论，再给必要依据；不要泛泛展开无关原则。"
-    )
+    # question_for_bot = (
+    #     question
+    #     + "\n\n请基于已召回的 OpenViking 记忆直接回答。"
+    #     + "优先给结论，再给必要依据；不要泛泛展开无关原则。"
+    # )
     standard_answer = qa_item.get("standard_answer", "")
     print(f"Processing {orig_idx}/{total_count}: {question[:60]}...")
 
     # 8. 每个问题使用独立 session，避免上下文干扰
-    session_id = f"vaka_eval_qa_06{orig_idx}"
+    session_id = f"vaka_eval_qa_07{orig_idx}"
     data, time_cost = await chat_with_bot(
-        question_for_bot,
+        question,
         openviking_url=openviking_url,
         session_id=session_id,
         user_id=user_id,
