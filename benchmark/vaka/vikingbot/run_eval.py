@@ -8,6 +8,8 @@ import os
 import time
 from pathlib import Path
 
+_RUN_ID = int(time.time())
+
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DEFAULT_OUTPUT = str(SCRIPT_DIR / "result" / "vaka_qa_result.csv")
 
@@ -208,7 +210,7 @@ async def process_single_qa(
     print(f"Processing {orig_idx}/{total_count}: {question[:60]}...")
 
     # 8. 每个问题使用独立 session，避免上下文干扰
-    session_id = f"vaka_eval_qa_07{orig_idx}"
+    session_id = f"vaka_eval_{_RUN_ID}_{orig_idx}"
     data, time_cost = await chat_with_bot(
         question,
         openviking_url=openviking_url,
