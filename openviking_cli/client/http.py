@@ -764,19 +764,27 @@ class AsyncHTTPClient(BaseClient):
 
     # ============= Sessions =============
 
-    async def create_session(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+    async def create_session(
+        self, session_id: Optional[str] = None, telemetry: TelemetryRequest = False
+    ) -> Dict[str, Any]:
         """Create a new session.
 
         Args:
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
         """
-        json_body = {"session_id": session_id} if session_id else {}
+        telemetry = self._validate_telemetry(telemetry)
+        json_body: Dict[str, Any] = {}
+        if session_id is not None:
+            json_body["session_id"] = session_id
+        if telemetry is not False:
+            json_body["telemetry"] = telemetry
         response = await self._http.post(
             "/api/v1/sessions",
             json=json_body,
         )
-        return self._handle_response(response)
+        response_data = self._handle_response_data(response)
+        return self._attach_telemetry(response_data.get("result"), response_data)
 
     async def list_sessions(self) -> List[Any]:
         """List all sessions."""
@@ -847,6 +855,7 @@ class AsyncHTTPClient(BaseClient):
         parts: list[dict] | None = None,
         created_at: str | None = None,
         role_id: str | None = None,
+        telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -860,6 +869,7 @@ class AsyncHTTPClient(BaseClient):
 
         If both content and parts are provided, parts takes precedence.
         """
+        telemetry = self._validate_telemetry(telemetry)
         payload: Dict[str, Any] = {"role": role}
         if parts is not None:
             payload["parts"] = parts
@@ -872,12 +882,15 @@ class AsyncHTTPClient(BaseClient):
             payload["created_at"] = created_at
         if role_id is not None:
             payload["role_id"] = role_id
+        if telemetry is not False:
+            payload["telemetry"] = telemetry
 
         response = await self._http.post(
             f"/api/v1/sessions/{session_id}/messages",
             json=payload,
         )
-        return self._handle_response(response)
+        response_data = self._handle_response_data(response)
+        return self._attach_telemetry(response_data.get("result"), response_data)
 
     # ============= Pack =============
 
@@ -922,20 +935,38 @@ class AsyncHTTPClient(BaseClient):
 
         return str(to_path)
 
+    async def backup_ovpack(self, to: str) -> str:
+        """Back up public scopes as a restore-only .ovpack file."""
+        to_path = Path(to)
+        if to_path.is_dir():
+            to_path = to_path / "openviking-backup.ovpack"
+        elif not str(to_path).endswith(".ovpack"):
+            to_path = Path(str(to_path) + ".ovpack")
+
+        to_path.parent.mkdir(parents=True, exist_ok=True)
+
+        response = await self._http.post("/api/v1/pack/backup", json={})
+        if not response.is_success:
+            self._handle_response(response)
+
+        with open(to_path, "wb") as f:
+            f.write(response.content)
+
+        return str(to_path)
+
     async def import_ovpack(
         self,
         file_path: str,
         parent: str,
-        force: bool = False,
-        vectorize: bool = True,
+        on_conflict: Optional[str] = None,
     ) -> str:
         """Import .ovpack file."""
         parent = VikingURI.normalize(parent)
         request_data = {
             "parent": parent,
-            "force": force,
-            "vectorize": vectorize,
         }
+        if on_conflict is not None:
+            request_data["on_conflict"] = on_conflict
 
         file_path_obj = Path(file_path)
         if not file_path_obj.exists():
@@ -948,6 +979,32 @@ class AsyncHTTPClient(BaseClient):
 
         response = await self._http.post(
             "/api/v1/pack/import",
+            json=request_data,
+        )
+        result = self._handle_response(response)
+        return result.get("uri", "")
+
+    async def restore_ovpack(
+        self,
+        file_path: str,
+        on_conflict: Optional[str] = None,
+    ) -> str:
+        """Restore backup .ovpack file."""
+        request_data = {}
+        if on_conflict is not None:
+            request_data["on_conflict"] = on_conflict
+
+        file_path_obj = Path(file_path)
+        if not file_path_obj.exists():
+            raise FileNotFoundError(f"Local ovpack file not found: {file_path}")
+        if not file_path_obj.is_file():
+            raise ValueError(f"Path {file_path} is not a file")
+
+        temp_file_id = await self._upload_temp_file(file_path)
+        request_data["temp_file_id"] = temp_file_id
+
+        response = await self._http.post(
+            "/api/v1/pack/restore",
             json=request_data,
         )
         result = self._handle_response(response)

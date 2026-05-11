@@ -494,18 +494,28 @@ enum Commands {
         /// Output .ovpack file path
         to: String,
     },
+    /// [Data] Back up public OpenViking scopes as a restore-only .ovpack
+    Backup {
+        /// Output .ovpack file path
+        to: String,
+    },
     /// [Data] Import .ovpack into target URI
     Import {
         /// Input .ovpack file path
         file_path: String,
         /// Target parent URI
         target_uri: String,
-        /// Overwrite when conflicts exist
-        #[arg(long)]
-        force: bool,
-        /// Disable vectorization after import
-        #[arg(long)]
-        no_vectorize: bool,
+        /// Conflict policy: fail, overwrite, or skip
+        #[arg(long, value_parser = ["fail", "overwrite", "skip"])]
+        on_conflict: Option<String>,
+    },
+    /// [Data] Restore a backup .ovpack to original public scope roots
+    Restore {
+        /// Input backup .ovpack file path
+        file_path: String,
+        /// Conflict policy: fail, overwrite, or skip
+        #[arg(long, value_parser = ["fail", "overwrite", "skip"])]
+        on_conflict: Option<String>,
     },
     // --- Interactive Tools ---
     /// [Interactive] Interactive TUI file explorer
@@ -1058,12 +1068,18 @@ async fn main() {
         } => handlers::handle_link(from_uri, to_uris, reason, ctx).await,
         Commands::Unlink { from_uri, to_uri } => handlers::handle_unlink(from_uri, to_uri, ctx).await,
         Commands::Export { uri, to } => handlers::handle_export(uri, to, ctx).await,
+        Commands::Backup { to } => handlers::handle_backup(to, ctx).await,
         Commands::Import {
             file_path,
             target_uri,
-            force,
-            no_vectorize,
-        } => handlers::handle_import(file_path, target_uri, force, no_vectorize, ctx).await,
+            on_conflict,
+        } => {
+            handlers::handle_import(file_path, target_uri, on_conflict, ctx).await
+        }
+        Commands::Restore {
+            file_path,
+            on_conflict,
+        } => handlers::handle_restore(file_path, on_conflict, ctx).await,
         Commands::Wait { timeout } => {
             let client = ctx.get_client();
             commands::system::wait(&client, timeout, ctx.output_format, ctx.compact).await
@@ -1374,6 +1390,32 @@ mod tests {
         ]);
 
         assert!(result.is_err(), "removed write flags should not parse");
+    }
+
+    #[test]
+    fn cli_import_rejects_removed_vectorize_flag() {
+        let result = Cli::try_parse_from([
+            "ov",
+            "import",
+            "./exports/demo.ovpack",
+            "viking://resources/imported/",
+            "--no-vectorize",
+        ]);
+
+        assert!(result.is_err(), "removed import vectorize flag should not parse");
+    }
+
+    #[test]
+    fn cli_import_rejects_removed_force_flag() {
+        let result = Cli::try_parse_from([
+            "ov",
+            "import",
+            "./exports/demo.ovpack",
+            "viking://resources/imported/",
+            "--force",
+        ]);
+
+        assert!(result.is_err(), "removed import force flag should not parse");
     }
 
     #[test]

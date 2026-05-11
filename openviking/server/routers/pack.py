@@ -4,6 +4,7 @@
 
 import os
 import tempfile
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse
@@ -13,6 +14,7 @@ from starlette.background import BackgroundTask
 from openviking.core.path_variables import resolve_path_variables
 from openviking.server.auth import get_request_context, require_auth_root_or_admin
 from openviking.server.dependencies import get_service
+from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.temp_upload_store import TempUploadStore
@@ -32,16 +34,23 @@ class ImportRequest(BaseModel):
     Attributes:
         temp_file_id: Temporary upload id returned by /api/v1/resources/temp_upload.
         parent: Parent URI under which the imported pack will be placed.
-        force: Whether to overwrite existing content if needed.
-        vectorize: Whether to build vectors for imported content.
+        on_conflict: Conflict policy: fail, overwrite, or skip.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     temp_file_id: str
     parent: str
-    force: bool = False
-    vectorize: bool = True
+    on_conflict: Optional[Literal["fail", "overwrite", "skip"]] = None
+
+
+class RestoreRequest(BaseModel):
+    """Request model for backup restore."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    temp_file_id: str
+    on_conflict: Optional[Literal["fail", "overwrite", "skip"]] = None
 
 
 @router.post("/export")
@@ -83,10 +92,46 @@ async def export_ovpack(
             filename=filename,
             background=BackgroundTask(cleanup),
         )
-    except Exception:
+    except Exception as exc:
         # Clean up temp file on error
         if os.path.exists(temp_file):
             os.unlink(temp_file)
+        mapped = map_exception(exc, resource=uri, resource_type="resource")
+        if mapped is not None:
+            raise mapped from exc
+        raise
+
+
+@router.post("/backup")
+@require_auth_root_or_admin
+async def backup_ovpack(
+    request: Request,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Back up all public OpenViking scopes as a restore-only .ovpack file."""
+    service = get_service()
+    temp_dir = tempfile.gettempdir()
+    temp_file = os.path.join(temp_dir, f"backup_{os.urandom(16).hex()}.ovpack")
+
+    try:
+        await service.pack.backup_ovpack(temp_file, ctx=ctx)
+
+        def cleanup():
+            if os.path.exists(temp_file):
+                os.unlink(temp_file)
+
+        return FileResponse(
+            path=temp_file,
+            media_type="application/zip",
+            filename="openviking-backup.ovpack",
+            background=BackgroundTask(cleanup),
+        )
+    except Exception as exc:
+        if os.path.exists(temp_file):
+            os.unlink(temp_file)
+        mapped = map_exception(exc, resource="viking://", resource_type="resource")
+        if mapped is not None:
+            raise mapped from exc
         raise
 
 
@@ -110,8 +155,36 @@ async def import_ovpack(
             resolved.local_path,
             parent,
             ctx=ctx,
-            force=body.force,
-            vectorize=body.vectorize,
+            on_conflict=body.on_conflict,
+        )
+    except Exception:
+        await store.mark_failed(resolved, ctx)
+        raise
+    else:
+        await store.mark_consumed(resolved, ctx)
+    finally:
+        await resolved.cleanup()
+
+    return Response(status="ok", result={"uri": result})
+
+
+@router.post("/restore")
+@require_auth_root_or_admin
+async def restore_ovpack(
+    request: Request,
+    body: RestoreRequest,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Restore a backup .ovpack file."""
+    service = get_service()
+    store = TempUploadStore.build(request.app.state.config)
+    resolved = await store.resolve_for_consume(body.temp_file_id, ctx)
+
+    try:
+        result = await service.pack.restore_ovpack(
+            resolved.local_path,
+            ctx=ctx,
+            on_conflict=body.on_conflict,
         )
     except Exception:
         await store.mark_failed(resolved, ctx)

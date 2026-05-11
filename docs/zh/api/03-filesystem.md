@@ -986,8 +986,16 @@ openviking unlink viking://resources/docs/auth/ viking://resources/docs/security
 **处理流程**：
 1. 验证用户权限
 2. 遍历指定 URI 下的资源
-3. 打包成 zip 格式（.ovpack）
-4. 以文件流形式返回
+3. 写入内容文件和 OVPack manifest
+4. 打包成 zip 格式（.ovpack）
+5. 以文件流形式返回
+
+**格式说明**：
+- 导出的 ZIP 会包含 `<root>/_._ovpack_manifest.json`，这是 `.ovpack_manifest.json` 在 ZIP 内的转义名称。
+- `entries[].path` 是相对导出 root 的路径；`""` 表示 root 目录本身。
+- 文件条目包含 `size` 和 `sha256`；`content_sha256` 覆盖按路径排序后的文件列表（`path`、`size`、`sha256`）。
+- 原始 embedding 向量以及 `created_at`、`updated_at`、`active_count` 等运行态字段不会被导出。
+- OVPack 不额外设置包大小、文件数量或目录深度上限；实际可处理规模由 ZIP、存储后端和运行环境决定。
 
 **代码入口**：
 - `openviking/server/routers/pack.py:export_ovpack` - HTTP 路由
@@ -1059,8 +1067,9 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack
 **处理流程**：
 1. 验证用户权限
 2. 解析上传的 `.ovpack` 文件
-3. 导入资源到目标位置
-4. 可选地触发向量化
+3. 校验 manifest 元数据、路径、文件和目录集合、文件大小和 checksum
+4. 应用 `on_conflict`
+5. 导入资源到目标位置，并重建向量
 
 **代码入口**：
 - `openviking/server/routers/pack.py:import_ovpack` - HTTP 路由
@@ -1075,10 +1084,22 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack
 |------|------|------|--------|------|
 | temp_file_id | string | 是 | - | 临时上传文件 ID（通过 [temp_upload](02-resources.md#temp_upload) 获取） |
 | parent | string | 是 | - | 目标父级 URI（导入到此处） |
-| force | bool | 否 | False | 是否覆盖已有资源 |
-| vectorize | bool | 否 | True | 是否触发向量化 |
+| on_conflict | string | 否 | fail | 冲突策略：`fail`、`overwrite` 或 `skip` |
 
 **权限要求**：ROOT 或 ADMIN
+
+**行为说明**：
+- 导入后总是在目标环境重建向量。API 已不再接受 `vectorize` 或 `force`。
+- Session 导入只恢复 session 文件状态，不触发向量化。
+- `on_conflict=fail` 且目标 root 已存在时，会返回结构化的 `409 CONFLICT`。
+- `on_conflict=overwrite` 会替换已有目标 root。`on_conflict=skip` 会保留已有目标 root，并直接返回该路径，不写入包内容。`skip` 是 root 级跳过，不是文件级补齐。
+- 默认拒绝没有 manifest 的包，因为这类包无法提供内容完整性校验。
+- 带 manifest entries 的包如果缺少内容文件或目录、混入额外文件或目录、文件大小不同、单文件 `sha256` 不同，或整体 `content_sha256` 缺失/不匹配，都会被拒绝导入。
+- manifest `format_version` 不是当前支持版本的包会被拒绝。
+- `.abstract.md` 和 `.overview.md` 会作为语义侧边文件恢复；`.relations.json` 和 OVPack 内部文件会被排除。
+- manifest `context_type` 必须和最终导入路径语义一致。
+- `viking://resources/` 这类顶级 scope 包必须导入到 `viking://`。
+- OVPack 不额外设置导入包大小、文件数量或目录深度上限；实际可处理规模由 ZIP、存储后端和运行环境决定。
 
 #### 3. 使用示例
 
@@ -1105,8 +1126,7 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
     \"parent\": \"viking://resources/imported/\",
-    \"force\": true,
-    \"vectorize\": true
+    \"on_conflict\": \"overwrite\"
   }"
 ```
 
@@ -1128,11 +1148,8 @@ client.initialize()
 # 导入 .ovpack 文件
 ov import ./exports/my-project.ovpack viking://resources/imported/
 
-# 强制覆盖已有内容
-ov import ./exports/my-project.ovpack viking://resources/imported/ --force
-
-# 不进行向量化
-ov import ./exports/my-project.ovpack viking://resources/imported/ --no-vectorize
+# 显式冲突策略
+ov import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict overwrite
 ```
 
 **响应示例**
@@ -1147,6 +1164,81 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --no-vectoriz
     "operation_id": "550e8400-e29b-41d4-a716-446655440000"
   }
 }
+```
+
+**冲突错误示例**
+
+```json
+{
+  "status": "error",
+  "error": {
+    "code": "CONFLICT",
+    "message": "Resource already exists at viking://resources/imported/my-project. Use on_conflict='overwrite' to replace it.",
+    "details": {
+      "resource": "viking://resources/imported/my-project"
+    }
+  }
+}
+```
+
+---
+
+### backup_ovpack
+
+将公开 scope root 备份为只能通过 restore 恢复的 `.ovpack` 文件。备份包含
+`resources`、`user`、`agent`、`session`，不包含 `temp`、`queue` 等内部运行态数据。
+
+```
+POST /api/v1/pack/backup
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/pack/backup \
+  -H "X-API-Key: your-admin-key" \
+  --output openviking-backup.ovpack
+```
+
+CLI：
+
+```bash
+ov backup ./backups/openviking.ovpack
+```
+
+---
+
+### restore_ovpack
+
+恢复 `backup_ovpack` 生成的备份包到原始公开 scope root。普通 import 不接受备份包。
+非 session 内容恢复后重新向量化；session 只恢复文件状态。
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| temp_file_id | string | 是 | - | 临时上传文件 ID |
+| on_conflict | string | 否 | fail | 冲突策略：`fail`、`overwrite` 或 `skip` |
+
+```
+POST /api/v1/pack/restore
+Content-Type: application/json
+```
+
+```bash
+TEMP_FILE_ID=$(
+  curl -s -X POST http://localhost:1933/api/v1/resources/temp_upload \
+    -H "X-API-Key: your-admin-key" \
+    -F "file=@./backups/openviking.ovpack" \
+  | jq -r '.result.temp_file_id'
+)
+
+curl -X POST http://localhost:1933/api/v1/pack/restore \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-admin-key" \
+  -d "{\"temp_file_id\":\"$TEMP_FILE_ID\",\"on_conflict\":\"overwrite\"}"
+```
+
+CLI：
+
+```bash
+ov restore ./backups/openviking.ovpack --on-conflict overwrite
 ```
 
 ---

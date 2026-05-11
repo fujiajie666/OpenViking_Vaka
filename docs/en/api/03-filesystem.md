@@ -986,8 +986,16 @@ Packages all resources under the specified URI into a `.ovpack` file for backup 
 **Processing Flow**:
 1. Verify user permissions
 2. Traverse resources under the specified URI
-3. Package into zip format (`.ovpack`)
-4. Return as file stream
+3. Write content files and the OVPack manifest
+4. Package into zip format (`.ovpack`)
+5. Return as file stream
+
+**Format Notes**:
+- The exported ZIP contains `<root>/_._ovpack_manifest.json`, the escaped ZIP name for `.ovpack_manifest.json`.
+- `entries[].path` is relative to the exported root; `""` means the root directory itself.
+- File entries include `size` and `sha256`; `content_sha256` covers the sorted file list of `path`, `size`, and `sha256`.
+- Raw embedding vectors and runtime fields such as `created_at`, `updated_at`, and `active_count` are not exported.
+- OVPack does not add package-size, file-count, or directory-depth limits; the practical limit comes from ZIP, the storage backend, and the runtime environment.
 
 **Code Entry Points**:
 - `openviking/server/routers/pack.py:export_ovpack` - HTTP router
@@ -1059,8 +1067,9 @@ Imports a `.ovpack` file to a specified location for restoring or migrating data
 **Processing Flow**:
 1. Verify user permissions
 2. Parse uploaded `.ovpack` file
-3. Import resources to target location
-4. Optionally trigger vectorization
+3. Validate manifest metadata, paths, file and directory sets, file sizes, and checksums
+4. Apply `on_conflict`
+5. Import resources to target location and rebuild vectors
 
 **Code Entry Points**:
 - `openviking/server/routers/pack.py:import_ovpack` - HTTP router
@@ -1075,10 +1084,22 @@ Imports a `.ovpack` file to a specified location for restoring or migrating data
 |-----------|------|----------|---------|-------------|
 | temp_file_id | string | Yes | - | Temporary upload file ID (obtained via [temp_upload](02-resources.md#temp_upload)) |
 | parent | string | Yes | - | Target parent URI (import to this location) |
-| force | bool | No | False | Whether to overwrite existing resources |
-| vectorize | bool | No | True | Whether to trigger vectorization |
+| on_conflict | string | No | fail | Conflict policy: `fail`, `overwrite`, or `skip` |
 
 **Permission Requirements**: ROOT or ADMIN
+
+**Behavior Notes**:
+- Imports always rebuild vectors in the target environment. The API no longer accepts `vectorize` or `force`.
+- Session imports restore session files and do not trigger vectorization.
+- `on_conflict=fail` returns a structured `409 CONFLICT` when the target root already exists.
+- `on_conflict=overwrite` replaces the existing target root. `on_conflict=skip` keeps the existing target root and returns it without writing package contents. `skip` is root-level, not file-level.
+- Packages without a manifest are rejected by default because they cannot provide content integrity guarantees.
+- Packages with manifest entries are rejected if content files or directories are missing, extra files or directories are present, file sizes differ, per-file `sha256` differs, or `content_sha256` is missing or differs.
+- Packages whose manifest `format_version` is not the current supported version are rejected.
+- `.abstract.md` and `.overview.md` are restored as semantic sidecars. `.relations.json` and OVPack internals are excluded.
+- Manifest `context_type` must match the final import path semantics.
+- Top-level scope packages such as `viking://resources/` must be imported to `viking://`.
+- OVPack does not add import package-size, file-count, or directory-depth limits; the practical limit comes from ZIP, the storage backend, and the runtime environment.
 
 #### 3. Usage Examples
 
@@ -1105,8 +1126,7 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
     \"parent\": \"viking://resources/imported/\",
-    \"force\": true,
-    \"vectorize\": true
+    \"on_conflict\": \"overwrite\"
   }"
 ```
 
@@ -1128,11 +1148,8 @@ client.initialize()
 # Import .ovpack file
 ov import ./exports/my-project.ovpack viking://resources/imported/
 
-# Force overwrite existing content
-ov import ./exports/my-project.ovpack viking://resources/imported/ --force
-
-# Skip vectorization
-ov import ./exports/my-project.ovpack viking://resources/imported/ --no-vectorize
+# Explicit conflict policy
+ov import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict overwrite
 ```
 
 **Response Example**
@@ -1147,6 +1164,83 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --no-vectoriz
     "operation_id": "550e8400-e29b-41d4-a716-446655440000"
   }
 }
+```
+
+**Conflict Error Example**
+
+```json
+{
+  "status": "error",
+  "error": {
+    "code": "CONFLICT",
+    "message": "Resource already exists at viking://resources/imported/my-project. Use on_conflict='overwrite' to replace it.",
+    "details": {
+      "resource": "viking://resources/imported/my-project"
+    }
+  }
+}
+```
+
+---
+
+### backup_ovpack
+
+Back up public scope roots as a restore-only `.ovpack` file. The backup includes
+`resources`, `user`, `agent`, and `session`; it excludes internal runtime data
+such as `temp` and `queue`.
+
+```
+POST /api/v1/pack/backup
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/pack/backup \
+  -H "X-API-Key: your-admin-key" \
+  --output openviking-backup.ovpack
+```
+
+CLI:
+
+```bash
+ov backup ./backups/openviking.ovpack
+```
+
+---
+
+### restore_ovpack
+
+Restore a backup package created by `backup_ovpack` to the original public scope
+roots. Regular import rejects backup packages. Non-session content is
+re-vectorized after restore; session files are restored without vectorization.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| temp_file_id | string | Yes | - | Temporary upload file ID |
+| on_conflict | string | No | fail | Conflict policy: `fail`, `overwrite`, or `skip` |
+
+```
+POST /api/v1/pack/restore
+Content-Type: application/json
+```
+
+```bash
+TEMP_FILE_ID=$(
+  curl -s -X POST http://localhost:1933/api/v1/resources/temp_upload \
+    -H "X-API-Key: your-admin-key" \
+    -F "file=@./backups/openviking.ovpack" \
+  | jq -r '.result.temp_file_id'
+)
+
+curl -X POST http://localhost:1933/api/v1/pack/restore \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-admin-key" \
+  -d "{\"temp_file_id\":\"$TEMP_FILE_ID\",\"on_conflict\":\"overwrite\"}"
+```
+
+CLI:
+
+```bash
+ov restore ./backups/openviking.ovpack --on-conflict overwrite
 ```
 
 ---
