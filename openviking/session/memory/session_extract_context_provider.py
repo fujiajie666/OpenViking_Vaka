@@ -241,52 +241,50 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         return "ToolCall: " + "; ".join(fields)
 
     def _build_prefetch_search_query(self) -> str:
-        """Build a compact semantic query from raw conversation messages.
+        """Build a compact semantic query from user messages only.
 
         The LLM already receives the full conversation via pre_fetch_messages.
-        Search only needs topical recall signals, so use the raw message content
-        instead of the prompt-wrapped conversation.
+        For this prefetch ablation, search only uses user-authored text and
+        excludes assistant messages and tool calls.
         """
         if not isinstance(self.messages, list):
             return ""
 
-        primary_sections: List[str] = []
-        supporting_sections: List[str] = []
+        sections: List[str] = []
 
         for msg in self.messages:
             role = getattr(msg, "role", "")
+            if role != "user":
+                continue
+
             role_id = getattr(msg, "role_id", "") or role
             parts = getattr(msg, "parts", [])
 
             text_parts: List[str] = []
-            tool_parts: List[str] = []
-
             for part in parts:
                 if hasattr(part, "text") and part.text:
-                    limit = (
-                        _PREFETCH_SEARCH_TEXT_PART_MAX_CHARS
-                        if role == "user"
-                        else _PREFETCH_SEARCH_ASSISTANT_TEXT_PART_MAX_CHARS
+                    text_parts.append(
+                        self._truncate_prefetch_query_text(
+                            part.text,
+                            _PREFETCH_SEARCH_TEXT_PART_MAX_CHARS,
+                        )
                     )
-                    text_parts.append(self._truncate_prefetch_query_text(part.text, limit))
-                elif isinstance(part, ToolPart):
-                    tool_part = self._format_tool_part_for_search(part)
-                    if tool_part != "ToolCall: ":
-                        tool_parts.append(tool_part)
 
             if text_parts:
-                section = f"{role_id}: " + "\n".join(text_parts)
-                if role == "user":
-                    primary_sections.append(section)
-                else:
-                    supporting_sections.append(section)
+                sections.append(f"{role_id}: " + "\n".join(text_parts))
+                continue
 
-            if tool_parts:
-                supporting_sections.append(f"{role_id}: " + "\n".join(tool_parts))
+            content = getattr(msg, "content", "")
+            if content:
+                sections.append(
+                    f"{role_id}: "
+                    + self._truncate_prefetch_query_text(
+                        content,
+                        _PREFETCH_SEARCH_TEXT_PART_MAX_CHARS,
+                    )
+                )
 
-        query = "\n\n".join(primary_sections + supporting_sections)
-        if not query.strip():
-            query = self._assemble_conversation(self.messages)
+        query = "\n\n".join(sections)
 
         return self._truncate_prefetch_query_text(query, _PREFETCH_SEARCH_QUERY_MAX_CHARS)
 
@@ -375,6 +373,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 # 将所有目录作为 target_uri 传入（支持 List[str]）
                 dir_list = list(ls_dirs)
                 search_query = self._build_prefetch_search_query()
+                # logger.warning(f"search_query: {search_query}")
                 if not search_query:
                     search_query = "conversation"
                 search_result = await search_tool.execute(
