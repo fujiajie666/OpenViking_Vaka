@@ -10,14 +10,11 @@ import json
 import os
 from typing import TYPE_CHECKING, Any, Dict, List
 
-from openviking.core.namespace import to_user_space, to_agent_space
+from openviking.core.namespace import to_agent_space, to_user_space
 from openviking.message.part import ToolPart
 from openviking.server.identity import RequestContext, ToolContext
-from openviking.session.memory.dataclass import MemoryFileContent
-from openviking.session.memory.utils.uri import render_template
-from openviking.telemetry import tracer
-from openviking.utils.time_utils import parse_iso_datetime
 from openviking.session.memory.core import ExtractContextProvider
+from openviking.session.memory.dataclass import MemoryFileContent
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler, RoleScope
 from openviking.session.memory.memory_type_registry import (
     MemoryTypeRegistry,
@@ -27,7 +24,10 @@ from openviking.session.memory.tools import (
     add_tool_call_pair_to_messages,
     get_tool,
 )
+from openviking.session.memory.utils.uri import render_template
 from openviking.storage.viking_fs import VikingFS
+from openviking.telemetry import tracer
+from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -40,6 +40,7 @@ _PREFETCH_SEARCH_QUERY_MAX_CHARS = 5000
 _PREFETCH_SEARCH_TEXT_PART_MAX_CHARS = 1000
 _PREFETCH_SEARCH_ASSISTANT_TEXT_PART_MAX_CHARS = 500
 _PREFETCH_SEARCH_TOOL_FIELD_MAX_CHARS = 500
+
 
 class SessionExtractContextProvider(ExtractContextProvider):
     """会话提取 Provider - 从会话消息中提取记忆"""
@@ -193,7 +194,9 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                     }
                     if part.skill_uri:
                         tool_info["skill_name"] = part.skill_uri.rstrip("/").split("/")[-1]
-                    formatted_parts.append(f"[ToolCall] {json.dumps(tool_info, ensure_ascii=False)}")
+                    formatted_parts.append(
+                        f"[ToolCall] {json.dumps(tool_info, ensure_ascii=False)}"
+                    )
             return "\n".join(formatted_parts) if formatted_parts else msg.content
 
         def format_message_header(msg: Message, idx: int) -> str:
@@ -241,53 +244,54 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         return "ToolCall: " + "; ".join(fields)
 
     def _build_prefetch_search_query(self) -> str:
-        """Build a compact semantic query from user messages only.
+        """Build a compact semantic query from raw conversation messages.
 
         The LLM already receives the full conversation via pre_fetch_messages.
-        For this prefetch ablation, search only uses user-authored text and
-        excludes assistant messages and tool calls.
+        Search only needs topical recall signals, so use the raw message content
+        instead of the prompt-wrapped conversation.
         """
         if not isinstance(self.messages, list):
             return ""
 
-        sections: List[str] = []
+        primary_sections: List[str] = []
+        supporting_sections: List[str] = []
 
         for msg in self.messages:
             role = getattr(msg, "role", "")
-            if role != "user":
-                continue
-
             role_id = getattr(msg, "role_id", "") or role
             parts = getattr(msg, "parts", [])
 
             text_parts: List[str] = []
+            tool_parts: List[str] = []
+
             for part in parts:
                 if hasattr(part, "text") and part.text:
-                    text_parts.append(
-                        self._truncate_prefetch_query_text(
-                            part.text,
-                            _PREFETCH_SEARCH_TEXT_PART_MAX_CHARS,
-                        )
+                    limit = (
+                        _PREFETCH_SEARCH_TEXT_PART_MAX_CHARS
+                        if role == "user"
+                        else _PREFETCH_SEARCH_ASSISTANT_TEXT_PART_MAX_CHARS
                     )
+                    text_parts.append(self._truncate_prefetch_query_text(part.text, limit))
+                elif isinstance(part, ToolPart):
+                    tool_part = self._format_tool_part_for_search(part)
+                    if tool_part != "ToolCall: ":
+                        tool_parts.append(tool_part)
 
             if text_parts:
-                sections.append(f"{role_id}: " + "\n".join(text_parts))
-                continue
+                section = f"{role_id}: " + "\n".join(text_parts)
+                if role == "user":
+                    primary_sections.append(section)
+                else:
+                    supporting_sections.append(section)
 
-            content = getattr(msg, "content", "")
-            if content:
-                sections.append(
-                    f"{role_id}: "
-                    + self._truncate_prefetch_query_text(
-                        content,
-                        _PREFETCH_SEARCH_TEXT_PART_MAX_CHARS,
-                    )
-                )
+            if tool_parts:
+                supporting_sections.append(f"{role_id}: " + "\n".join(tool_parts))
 
-        query = "\n\n".join(sections)
+        query = "\n\n".join(primary_sections + supporting_sections)
+        if not query.strip():
+            query = self._assemble_conversation(self.messages)
 
         return self._truncate_prefetch_query_text(query, _PREFETCH_SEARCH_QUERY_MAX_CHARS)
-
 
     def create_tool_context(self, default_search_uris=[]):
         tool_ctx = ToolContext(
@@ -318,11 +322,10 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
         # 触发 registry 加载，过滤掉 agent_only 的 schema（trajectory/experience 只由 agent memory 处理）
         schemas = [
-            s for s in self._get_registry().list_all(include_disabled=False)
+            s
+            for s in self._get_registry().list_all(include_disabled=False)
             if not getattr(s, "agent_only", False)
         ]
-
-        from openviking.server.identity import ToolContext
 
         # Step 1: Separate schemas into multi-file (ls) and single-file (direct read)
         ls_dirs = set()  # directories to ls (for multi-file schemas)
@@ -373,7 +376,6 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 # 将所有目录作为 target_uri 传入（支持 List[str]）
                 dir_list = list(ls_dirs)
                 search_query = self._build_prefetch_search_query()
-                # logger.warning(f"search_query: {search_query}")
                 if not search_query:
                     search_query = "conversation"
                 search_result = await search_tool.execute(
@@ -463,7 +465,8 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
     def get_memory_schemas(self, ctx: RequestContext) -> List[Any]:
         """获取需要参与的 memory schemas（内部自动加载）"""
         return [
-            s for s in self._get_registry().list_all(include_disabled=False)
+            s
+            for s in self._get_registry().list_all(include_disabled=False)
             if not getattr(s, "agent_only", False)
         ]
 

@@ -421,7 +421,7 @@ openviking tree viking://resources/my-project/
 
 ### stat()
 
-获取文件或目录的状态信息。
+获取文件或目录的状态信息。对于目录，会返回目录下的项目计数。
 
 **参数**
 
@@ -435,6 +435,11 @@ openviking tree viking://resources/my-project/
 info = client.stat("viking://resources/docs/api.md")
 print(f"Size: {info['size']}")
 print(f"Is directory: {info['isDir']}")
+
+# 对于目录，会返回项目计数
+dir_info = client.stat("viking://resources/docs")
+if dir_info.get('isDir'):
+    print(f"Item count: {dir_info.get('count')}")
 ```
 
 **HTTP API**
@@ -452,9 +457,10 @@ curl -X GET "http://localhost:1933/api/v1/fs/stat?uri=viking://resources/docs/ap
 
 ```bash
 openviking stat viking://resources/my-project/docs/api.md
+openviking stat viking://resources/my-project/docs
 ```
 
-**响应**
+**响应（文件）**
 
 ```json
 {
@@ -465,11 +471,95 @@ openviking stat viking://resources/my-project/docs/api.md
     "mode": 33188,
     "modTime": "2024-01-01T00:00:00Z",
     "isDir": false,
+    "isLocked": false,
     "uri": "viking://resources/docs/api.md"
   },
   "time": 0.1
 }
 ```
+
+**响应（目录）**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "name": "docs",
+    "size": 4096,
+    "mode": 16877,
+    "modTime": "2024-01-01T00:00:00Z",
+    "isDir": true,
+    "isLocked": false,
+    "uri": "viking://resources/docs",
+    "count": 42
+  },
+  "time": 0.1
+}
+```
+
+`isLocked` 字段反映路径当前是否被 path lock 持有：路径自身存在有效的 `.path.ovlock`，或者任一祖先目录持有 SUBTREE 锁。当 LockManager 不可用或查询失败时返回 `false`，调用方可据此避免先写入再观察到 `ResourceBusyError`。
+
+`count` 字段（仅目录）包含该目录下的项目（文件和子目录）估计数量（来自向量索引）。如需对实际文件系统目录项进行精确计数，请改用 [`count()`](#count)。
+
+---
+
+### count()
+
+统计目录下的文件和子目录数量（基于实际文件系统遍历，非向量索引估算）。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| uri | str | 是 | - | 目标目录的 Viking URI |
+| recursive | bool | 否 | False | 是否递归统计所有后代；`False` 时只统计直接子项 |
+| show_all_hidden | bool | 否 | False | 是否包含隐藏文件（文件名以 `.` 开头） |
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+result = client.count("viking://resources/my-project")
+print(f"files={result['files']}, dirs={result['dirs']}, total={result['total']}")
+
+# 递归统计
+result = client.count("viking://resources/my-project", recursive=True)
+```
+
+**HTTP API**
+
+```
+GET /api/v1/fs/count?uri={uri}&recursive={bool}&show_all_hidden={bool}
+```
+
+```bash
+curl -X GET "http://localhost:1933/api/v1/fs/count?uri=viking://resources/my-project&recursive=true" \
+  -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+openviking count viking://resources/my-project
+openviking count viking://resources/my-project -r        # 递归
+openviking count viking://resources/my-project -r -a     # 递归并包含隐藏文件
+```
+
+**响应**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/my-project",
+    "files": 12,
+    "dirs": 3,
+    "total": 15
+  },
+  "time": 0.01
+}
+```
+
+若 `uri` 不是目录，会返回 `FailedPrecondition` 错误；若 `uri` 不存在，则返回 `NotFound`。
 
 ---
 
@@ -530,7 +620,7 @@ openviking mkdir viking://resources/new-project/ --description "接口文档目�
 
 ### rm()
 
-删除文件或目录。
+删除文件或目录。递归删除目录时会返回删除的项目估计数量。
 
 `rm` 是幂等操作：删除一个合法但不存在的 URI 仍会成功。
 URI 格式非法、scheme 不支持或使用非公开作用域时返回 `INVALID_URI`。
@@ -549,7 +639,9 @@ URI 格式非法、scheme 不支持或使用非公开作用域时返回 `INVALID
 client.rm("viking://resources/docs/old.md")
 
 # 递归删除目录
-client.rm("viking://resources/old-project/", recursive=True)
+result = client.rm("viking://resources/old-project/", recursive=True)
+if 'estimated_deleted_count' in result:
+    print(f"Deleted {result['estimated_deleted_count']} items")
 ```
 
 **HTTP API**
@@ -574,7 +666,7 @@ curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://resources/old-proje
 openviking rm viking://resources/old.md [--recursive]
 ```
 
-**响应**
+**响应（单个文件）**
 
 ```json
 {
@@ -585,6 +677,21 @@ openviking rm viking://resources/old.md [--recursive]
   "time": 0.1
 }
 ```
+
+**响应（递归删除）**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/old-project/",
+    "estimated_deleted_count": 42
+  },
+  "time": 0.1
+}
+```
+
+`estimated_deleted_count` 字段（递归删除时）包含删除的项目（文件和目录）估计数量（来自向量索引）。CLI 会在输出中显示此信息。
 
 ---
 
@@ -991,10 +1098,12 @@ openviking unlink viking://resources/docs/auth/ viking://resources/docs/security
 5. 以文件流形式返回
 
 **格式说明**：
-- 导出的 ZIP 会包含 `<root>/_._ovpack_manifest.json`，这是 `.ovpack_manifest.json` 在 ZIP 内的转义名称。
+- 导出的 ZIP 会把用户内容原样放在 `<root>/files/` 下，并把内部元数据放在 `<root>/_ovpack/` 下。
+- manifest 位于 `<root>/_ovpack/manifest.json`。
 - `entries[].path` 是相对导出 root 的路径；`""` 表示 root 目录本身。
 - 文件条目包含 `size` 和 `sha256`；`content_sha256` 覆盖按路径排序后的文件列表（`path`、`size`、`sha256`）。
-- 原始 embedding 向量以及 `created_at`、`updated_at`、`active_count` 等运行态字段不会被导出。
+- `_ovpack/index_records.jsonl` 保存可迁移的索引标量。`include_vectors=true` 时，`_ovpack/dense.f32` 保存纯 dense float32 向量快照和 embedding 元数据；底层 `VectorIndex.IndexType` 为 hybrid 时不支持向量快照导出。
+- `id`、`uri`、`account_id`、`created_at`、`updated_at`、`active_count` 等运行态字段会在目标环境重新生成，不从包内恢复。
 - OVPack 不额外设置包大小、文件数量或目录深度上限；实际可处理规模由 ZIP、存储后端和运行环境决定。
 
 **代码入口**：
@@ -1009,6 +1118,7 @@ openviking unlink viking://resources/docs/auth/ viking://resources/docs/security
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | uri | string | 是 | - | 要导出的 Viking URI |
+| include_vectors | boolean | 否 | false | 导出纯 dense 向量快照；底层 index type 为 hybrid 时会拒绝 |
 
 **权限要求**：ROOT 或 ADMIN
 
@@ -1026,7 +1136,8 @@ curl -X POST http://localhost:1933/api/v1/pack/export \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-admin-key" \
   -d '{
-    "uri": "viking://resources/my-project/"
+    "uri": "viking://resources/my-project/",
+    "include_vectors": false
   }' \
   --output my-project.ovpack
 ```
@@ -1048,6 +1159,9 @@ client.initialize()
 ```bash
 # 导出资源
 ov export viking://resources/my-project/ ./exports/my-project.ovpack
+
+# 导出 dense 向量快照
+ov export viking://resources/my-project/ ./exports/my-project.ovpack --include-vectors
 ```
 
 **响应示例**
@@ -1085,11 +1199,14 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack
 | temp_file_id | string | 是 | - | 临时上传文件 ID（通过 [temp_upload](02-resources.md#temp_upload) 获取） |
 | parent | string | 是 | - | 目标父级 URI（导入到此处） |
 | on_conflict | string | 否 | fail | 冲突策略：`fail`、`overwrite` 或 `skip` |
+| vector_mode | string | 否 | auto | 向量处理方式：`auto`、`recompute` 或 `require` |
 
 **权限要求**：ROOT 或 ADMIN
 
 **行为说明**：
-- 导入后总是在目标环境重建向量。API 已不再接受 `vectorize` 或 `force`。
+- API 已不再接受 `vectorize` 或 `force`。
+- `vector_mode=auto` 会在存在兼容 dense 快照时直接恢复，否则重新向量化；`recompute` 总是忽略包内向量；`require` 要求必须存在兼容 dense 快照，否则导入失败。
+- dense 快照兼容性会比较 embedding provider、model、input、query/document 参数和维度。
 - Session 导入只恢复 session 文件状态，不触发向量化。
 - `on_conflict=fail` 且目标 root 已存在时，会返回结构化的 `409 CONFLICT`。
 - `on_conflict=overwrite` 会替换已有目标 root。`on_conflict=skip` 会保留已有目标 root，并直接返回该路径，不写入包内容。`skip` 是 root 级跳过，不是文件级补齐。
@@ -1097,7 +1214,7 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack
 - 带 manifest entries 的包如果缺少内容文件或目录、混入额外文件或目录、文件大小不同、单文件 `sha256` 不同，或整体 `content_sha256` 缺失/不匹配，都会被拒绝导入。
 - manifest `format_version` 不是当前支持版本的包会被拒绝。
 - `.abstract.md` 和 `.overview.md` 会作为语义侧边文件恢复；`.relations.json` 和 OVPack 内部文件会被排除。
-- manifest `context_type` 必须和最终导入路径语义一致。
+- manifest index 标量中的 `context_type` 如果存在，必须和最终导入路径语义一致。
 - `viking://resources/` 这类顶级 scope 包必须导入到 `viking://`。
 - OVPack 不额外设置导入包大小、文件数量或目录深度上限；实际可处理规模由 ZIP、存储后端和运行环境决定。
 
@@ -1126,7 +1243,8 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
     \"parent\": \"viking://resources/imported/\",
-    \"on_conflict\": \"overwrite\"
+    \"on_conflict\": \"overwrite\",
+    \"vector_mode\": \"auto\"
   }"
 ```
 
@@ -1150,6 +1268,9 @@ ov import ./exports/my-project.ovpack viking://resources/imported/
 
 # 显式冲突策略
 ov import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict overwrite
+
+# 要求恢复兼容 dense 向量快照
+ov import ./exports/my-project.ovpack viking://resources/imported/ --vector-mode require
 ```
 
 **响应示例**
@@ -1187,6 +1308,7 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict
 
 将公开 scope root 备份为只能通过 restore 恢复的 `.ovpack` 文件。备份包含
 `resources`、`user`、`agent`、`session`，不包含 `temp`、`queue` 等内部运行态数据。
+设置 `include_vectors=true` 时，会额外导出兼容的纯 dense 向量快照；底层 index type 为 hybrid 时会拒绝导出向量快照。
 
 ```
 POST /api/v1/pack/backup
@@ -1194,7 +1316,9 @@ POST /api/v1/pack/backup
 
 ```bash
 curl -X POST http://localhost:1933/api/v1/pack/backup \
+  -H "Content-Type: application/json" \
   -H "X-API-Key: your-admin-key" \
+  -d '{"include_vectors":false}' \
   --output openviking-backup.ovpack
 ```
 
@@ -1202,6 +1326,7 @@ CLI：
 
 ```bash
 ov backup ./backups/openviking.ovpack
+ov backup ./backups/openviking.ovpack --include-vectors
 ```
 
 ---
@@ -1209,12 +1334,13 @@ ov backup ./backups/openviking.ovpack
 ### restore_ovpack
 
 恢复 `backup_ovpack` 生成的备份包到原始公开 scope root。普通 import 不接受备份包。
-非 session 内容恢复后重新向量化；session 只恢复文件状态。
+向量处理遵循 `vector_mode`；session 只恢复文件状态。
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | temp_file_id | string | 是 | - | 临时上传文件 ID |
 | on_conflict | string | 否 | fail | 冲突策略：`fail`、`overwrite` 或 `skip` |
+| vector_mode | string | 否 | auto | 向量处理方式：`auto`、`recompute` 或 `require` |
 
 ```
 POST /api/v1/pack/restore
@@ -1232,13 +1358,14 @@ TEMP_FILE_ID=$(
 curl -X POST http://localhost:1933/api/v1/pack/restore \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-admin-key" \
-  -d "{\"temp_file_id\":\"$TEMP_FILE_ID\",\"on_conflict\":\"overwrite\"}"
+  -d "{\"temp_file_id\":\"$TEMP_FILE_ID\",\"on_conflict\":\"overwrite\",\"vector_mode\":\"auto\"}"
 ```
 
 CLI：
 
 ```bash
 ov restore ./backups/openviking.ovpack --on-conflict overwrite
+ov restore ./backups/openviking.ovpack --on-conflict overwrite --vector-mode require
 ```
 
 ---
