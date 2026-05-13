@@ -61,6 +61,7 @@ def load_qa_from_csv(input_path: str, count: int | None = None) -> list[dict]:
 async def chat_with_bot(
     question: str,
     *,
+    client,
     openviking_url: str,
     session_id: str = "default",
     user_id: str | None = None,
@@ -68,8 +69,6 @@ async def chat_with_bot(
     api_key: str | None = None,
 ) -> tuple[dict, float]:
     """调用 OpenViking /bot/v1/chat 端点生成回答，返回 (完整响应dict, 耗时秒)"""
-    import httpx
-
     url = f"{openviking_url.rstrip('/')}/bot/v1/chat"
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -88,8 +87,7 @@ async def chat_with_bot(
         body["user_id"] = user_id
 
     start_time = time.time()
-    async with httpx.AsyncClient(timeout=300.0) as client:
-        resp = await client.post(url, json=body, headers=headers)
+    resp = await client.post(url, json=body, headers=headers)
 
     time_cost = time.time() - start_time
 
@@ -193,6 +191,7 @@ async def process_single_qa(
     orig_idx: int,
     total_count: int,
     *,
+    client,
     openviking_url: str,
     user_id: str | None,
     account: str | None,
@@ -213,6 +212,7 @@ async def process_single_qa(
     session_id = f"vaka_eval_{_RUN_ID}_{orig_idx}"
     data, time_cost = await chat_with_bot(
         question,
+        client=client,
         openviking_url=openviking_url,
         session_id=session_id,
         user_id=user_id,
@@ -248,6 +248,8 @@ async def process_single_qa(
 
 
 async def run_eval(args: argparse.Namespace) -> None:
+    import httpx
+
     # 8. 加载 QA 数据
     input_path = Path(args.input).expanduser()
     if not input_path.exists():
@@ -305,13 +307,18 @@ async def run_eval(args: argparse.Namespace) -> None:
     # 9. 并发处理，每题完成后立即写盘，中断不丢进度
     semaphore = asyncio.Semaphore(args.parallel)
     file_lock = asyncio.Lock()
+    limits = httpx.Limits(
+        max_connections=max(args.parallel, 1),
+        max_keepalive_connections=max(args.parallel, 1),
+    )
 
-    async def process_and_save(orig_idx: int, qa_item: dict) -> None:
+    async def process_and_save(client: httpx.AsyncClient, orig_idx: int, qa_item: dict) -> None:
         async with semaphore:
             row = await process_single_qa(
                 qa_item,
                 orig_idx,
                 total,
+                client=client,
                 openviking_url=args.openviking_url,
                 user_id=args.user_id,
                 account=args.account,
@@ -321,7 +328,8 @@ async def run_eval(args: argparse.Namespace) -> None:
             with open(output_path, "a", encoding="utf-8", newline="") as f:
                 csv.DictWriter(f, fieldnames=FIELDNAMES).writerow(row)
 
-    await asyncio.gather(*[process_and_save(orig_idx, qa) for orig_idx, qa in pending])
+    async with httpx.AsyncClient(timeout=300.0, limits=limits) as client:
+        await asyncio.gather(*[process_and_save(client, orig_idx, qa) for orig_idx, qa in pending])
     print(f"Evaluation completed, results saved to {output_path}")
 
 
