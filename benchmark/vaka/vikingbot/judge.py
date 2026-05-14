@@ -282,7 +282,7 @@ async def main() -> None:
     parser.add_argument(
         "--models",
         nargs="+",
-        default=["ep-20260423162207-qfqr8", "ep-20260501104936-72vfz", "ep-20260501105042-9kp5v"],
+        default=["ep-20260514141842-c7s2n", "ep-20260501104936-72vfz", "ep-20260501105042-9kp5v"],
         help="Judge model names (3-model ensemble, majority vote), default: 3 endpoints",
     )
     parser.add_argument(

@@ -67,6 +67,7 @@ async def chat_with_bot(
     user_id: str | None = None,
     account: str | None = None,
     api_key: str | None = None,
+    disable_memory_commit: bool = True,
 ) -> tuple[dict, float]:
     """调用 OpenViking /bot/v1/chat 端点生成回答，返回 (完整响应dict, 耗时秒)"""
     url = f"{openviking_url.rstrip('/')}/bot/v1/chat"
@@ -83,6 +84,8 @@ async def chat_with_bot(
         "session_id": session_id,
         "stream": False,
     }
+    if disable_memory_commit:
+        body["disabled_tools"] = ["openviking_memory_commit"]
     if user_id:
         body["user_id"] = user_id
 
@@ -196,6 +199,7 @@ async def process_single_qa(
     user_id: str | None,
     account: str | None,
     api_key: str | None,
+    disable_memory_commit: bool,
 ) -> dict:
     """处理单个 QA：调用 /bot/v1/chat 生成回答"""
     question = qa_item["question"]
@@ -218,6 +222,7 @@ async def process_single_qa(
         user_id=user_id,
         account=account,
         api_key=api_key,
+        disable_memory_commit=disable_memory_commit,
     )
     response = data.get("message", "")
     token_usage = data.get("token_usage") or {}
@@ -323,6 +328,7 @@ async def run_eval(args: argparse.Namespace) -> None:
                 user_id=args.user_id,
                 account=args.account,
                 api_key=args.api_key,
+                disable_memory_commit=not args.allow_memory_commit,
             )
         async with file_lock:
             with open(output_path, "a", encoding="utf-8", newline="") as f:
@@ -390,6 +396,11 @@ def main() -> None:
         "--update-mode",
         action="store_true",
         help="Update mode: if output file exists, update matching rows instead of overwriting",
+    )
+    parser.add_argument(
+        "--allow-memory-commit",
+        action="store_true",
+        help="Allow the bot to call openviking_memory_commit during eval. Default: disabled.",
     )
     args = parser.parse_args()
 
