@@ -482,6 +482,7 @@ class OpenAPIChannel(BaseChannel):
                 session_key=session_key,
                 sender_id=user_id,
                 content=content,
+                metadata={"disabled_tools": request.disabled_tools},
             )
 
             await self.bus.publish_inbound(msg)
@@ -547,6 +548,7 @@ class OpenAPIChannel(BaseChannel):
                     session_key=session_key,
                     sender_id=user_id,
                     content=request.message,
+                    metadata={"disabled_tools": request.disabled_tools},
                 )
 
                 await self.bus.publish_inbound(msg)
@@ -626,6 +628,7 @@ class OpenAPIChannel(BaseChannel):
                 sender_id=user_id,
                 content=content,
                 need_reply=request.need_reply,
+                metadata={"disabled_tools": request.disabled_tools},
             )
 
             await self.bus.publish_inbound(msg)
@@ -698,6 +701,7 @@ class OpenAPIChannel(BaseChannel):
                     session_key=session_key,
                     sender_id=user_id,
                     content=request.message,
+                    metadata={"disabled_tools": request.disabled_tools},
                 )
 
                 await self.bus.publish_inbound(msg)

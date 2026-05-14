@@ -60,6 +60,10 @@ class ChatRequest(BaseModel):
     channel_id: Optional[str] = Field(
         default=None, description="Channel ID for multi-channel routing (optional)"
     )
+    disabled_tools: List[str] = Field(
+        default_factory=list,
+        description="Tool names to hide for this request",
+    )
 
 
 class ChatResponse(BaseModel):
