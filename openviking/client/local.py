@@ -312,6 +312,7 @@ class LocalClient(BaseClient):
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
+        level: Optional[List[int]] = None,
     ) -> Any:
         """Semantic search without session context."""
         resolved_filter = _resolve_search_filter(filter, since, until, time_field)
@@ -325,6 +326,7 @@ class LocalClient(BaseClient):
                 limit=limit,
                 score_threshold=score_threshold,
                 filter=resolved_filter,
+                level=level,
             ),
         )
         return attach_telemetry_payload(
@@ -344,6 +346,7 @@ class LocalClient(BaseClient):
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
+        level: Optional[List[int]] = None,
     ) -> Any:
         """Semantic search with optional session context."""
         resolved_filter = _resolve_search_filter(filter, since, until, time_field)
@@ -361,6 +364,7 @@ class LocalClient(BaseClient):
                 limit=limit,
                 score_threshold=score_threshold,
                 filter=resolved_filter,
+                level=level,
             )
 
         execution = await run_with_telemetry(

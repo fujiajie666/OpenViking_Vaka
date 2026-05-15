@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import time
 from typing import Any, Dict, List, Optional
 
@@ -197,7 +198,6 @@ class VikingClient:
 
     def should_sender_fanout(self) -> bool:
         return self._is_root_key_mode()
-
 
     async def find(self, query: str, target_uri: Optional[str] = None):
         """搜索资源"""
@@ -465,7 +465,6 @@ class VikingClient:
         session_id = create_res["session_id"]
         session = client.session(session_id)
 
-
         for message in messages:
             role = message.get("role")
             content = message.get("content")
@@ -561,7 +560,6 @@ async def main_test():
 
 
 async def account_test():
-
     client = ov.AsyncHTTPClient(
         url="http://localhost:1933",
         api_key="",
