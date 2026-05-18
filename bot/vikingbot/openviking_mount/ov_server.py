@@ -365,7 +365,7 @@ class VikingClient:
     async def search_memory(
         self, query: str, user_ids: str | list[str], agent_user_id: str, limit: int = 10
     ) -> dict[str, list[Any]]:
-        """通过上下文消息，检索viking 的user memory 和 agent memory（含skills）。"""
+        """通过上下文消息，检索viking 的user memory 和 agent memory。"""
         await self._load_namespace_policy()
 
         def _extract_memories(result: Any) -> list[Any]:
