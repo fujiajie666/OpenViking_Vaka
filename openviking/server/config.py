@@ -141,16 +141,6 @@ class TempUploadConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-class TempUploadConfig(BaseModel):
-    """Temporary upload configuration."""
-
-    default_mode: str = "local"
-    shared_max_size_bytes: int = 512 * 1024 * 1024
-    shared_prefix: str = "viking://upload"
-
-    model_config = {"extra": "forbid"}
-
-
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933

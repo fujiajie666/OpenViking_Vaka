@@ -245,29 +245,6 @@ def create_app(
             app.state.oauth_gc_task = oauth_gc_task
             logger.info("OAuth 2.1 store initialized at %s", oauth_store._db_path)
 
-        # Initialize OAuth 2.1 store + provider when enabled in OpenViking config.
-        # The store + provider instances were already constructed at app
-        # creation time so the SDK routes could capture them; here we just
-        # async-initialize the SQLite connection on the same instance.
-        oauth_store = getattr(app.state, "oauth_store", None)
-        oauth_gc_task: Optional[asyncio.Task] = None
-        if oauth_store is not None:
-            await oauth_store.initialize()
-
-            async def _oauth_gc_loop(store) -> None:  # noqa: ANN001
-                while True:
-                    try:
-                        await asyncio.sleep(60)
-                        await store.gc_expired()
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as e:  # noqa: BLE001
-                        logger.warning("OAuth GC loop error: %s", e)
-
-            oauth_gc_task = asyncio.create_task(_oauth_gc_loop(oauth_store))
-            app.state.oauth_gc_task = oauth_gc_task
-            logger.info("OAuth 2.1 store initialized at %s", oauth_store._db_path)
-
         # Start TaskTracker cleanup loop
         task_tracker = get_task_tracker()
         task_tracker.start_cleanup_loop()
