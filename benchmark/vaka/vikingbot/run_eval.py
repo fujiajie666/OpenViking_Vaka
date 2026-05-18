@@ -134,6 +134,36 @@ def _extract_memories_from_payload(payload: object) -> list[dict]:
     return []
 
 
+def _extract_multi_read_memories(data: str) -> list[dict]:
+    """Parse openviking_multi_read tool result string into structured memories."""
+    import re
+
+    memories = []
+    block_pattern = re.compile(
+        r"^--- START OF (?P<uri>.+?) ---\s*\n"
+        r"(?P<content>.*?)"
+        r"\n^--- END OF (?P=uri) ---\s*$",
+        re.MULTILINE | re.DOTALL,
+    )
+
+    for match in block_pattern.finditer(data):
+        uri = match.group("uri").strip()
+        content = match.group("content").strip()
+        if content.startswith("ERROR:"):
+            continue
+        if uri and content:
+            memories.append(
+                {
+                    "uri": uri,
+                    "score": None,
+                    "abstract": content[:200],
+                    "content": content,
+                    "source": "multi_read",
+                }
+            )
+    return memories
+
+
 def extract_retrieved_memories(data: dict) -> tuple[str, list[dict]]:
     """Extract retrieved memories from bot response. Returns (query_memory_text, llm_memories_list)."""
     query_memory = ""
@@ -144,32 +174,59 @@ def extract_retrieved_memories(data: dict) -> tuple[str, list[dict]]:
     llm_memories: list[dict] = []
     events = data.get("events")
     if isinstance(events, list):
+        # Pair tool_call + tool_result by order
+        pending_tool_name: str | None = None
         for event in events:
-            if not isinstance(event, dict) or event.get("type") != "tool_result":
+            if not isinstance(event, dict):
                 continue
-            llm_memories.extend(_extract_memories_from_payload(event.get("data")))
+            event_type = event.get("type")
+            event_data = event.get("data", "")
 
-    deduped: list[dict] = []
-    seen: set[str] = set()
+            if event_type == "tool_call":
+                # tool_call data format: "tool_name({args})"
+                if isinstance(event_data, str):
+                    pending_tool_name = event_data.split("(", 1)[0].strip()
+                else:
+                    pending_tool_name = None
+
+            elif event_type == "tool_result":
+                if pending_tool_name == "openviking_multi_read" and isinstance(event_data, str):
+                    llm_memories.extend(_extract_multi_read_memories(event_data))
+                else:
+                    llm_memories.extend(_extract_memories_from_payload(event_data))
+                pending_tool_name = None
+
+    deduped_by_key: dict[str, dict] = {}
+    key_order: list[str] = []
     for memory in llm_memories:
         key = memory.get("uri")
         if not isinstance(key, str) or not key:
             key = json.dumps(memory, ensure_ascii=False, sort_keys=True)
-        if key in seen:
+        existing = deduped_by_key.get(key)
+        if existing is None:
+            key_order.append(key)
+            deduped_by_key[key] = memory
             continue
-        seen.add(key)
-        deduped.append(memory)
 
+        if memory.get("source") == "multi_read" and existing.get("source") != "multi_read":
+            deduped_by_key[key] = memory
+
+    deduped = [deduped_by_key[key] for key in key_order]
     return query_memory, deduped
 
 
 def build_memories_text(query_memory: str, llm_memories: list[dict]) -> str:
     parts: list[str] = []
     if query_memory.strip():
-        parts.append(query_memory.strip())
-    if llm_memories:
+        parts.append(f"[viking_search]\n{query_memory.strip()}")
+
+    # Split llm_memories by source
+    search_memories = [m for m in llm_memories if m.get("source") != "multi_read"]
+    multi_read_memories = [m for m in llm_memories if m.get("source") == "multi_read"]
+
+    if search_memories:
         lines: list[str] = []
-        for memory in llm_memories:
+        for memory in search_memories:
             uri = str(memory.get("uri") or "")
             score = memory.get("score")
             score_text = f"{float(score):.6f}" if isinstance(score, (int, float)) else ""
@@ -184,7 +241,23 @@ def build_memories_text(query_memory: str, llm_memories: list[dict]) -> str:
             if entry_parts:
                 lines.append(" | ".join(entry_parts))
         if lines:
-            parts.append("\n".join(lines))
+            parts.append(f"[tool_search]\n" + "\n".join(lines))
+
+    if multi_read_memories:
+        lines: list[str] = []
+        for memory in multi_read_memories:
+            uri = str(memory.get("uri") or "")
+            abstract = str(memory.get("abstract") or "").replace("\n", " ").strip()
+            entry_parts = []
+            if uri:
+                entry_parts.append(uri)
+            if abstract:
+                entry_parts.append(abstract)
+            if entry_parts:
+                lines.append(" | ".join(entry_parts))
+        if lines:
+            parts.append(f"[multi_read]\n" + "\n".join(lines))
+
     return "\n\n".join(parts)
 
 

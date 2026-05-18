@@ -102,11 +102,16 @@ class MemoryIsolationHandler:
                 agent_ids.add(role_scope.agent_ids[0])
 
         if item_dict.get("ranges") is None:
+            add_user_id(item_dict.get("user"))
             add_user_id(item_dict.get("user_id"))
             add_agent_id(item_dict.get("agent_id"))
             check_set_default()
             item_dict["user_id"] = list(user_ids)[0]
             item_dict["agent_id"] = list(agent_ids)[0]
+            if "user" in item_dict:
+                user_value = str(item_dict.get("user") or "").strip()
+                if not user_value or user_value not in role_scope.user_ids:
+                    item_dict["user"] = item_dict["user_id"]
 
         else:
             # 使用 ExtractContext 的方法解析 ranges

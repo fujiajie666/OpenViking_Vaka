@@ -222,7 +222,9 @@ Skills with available="false" need dependencies installed first - you can try in
                     "- For questions involving several named items, stages, or audiences, handle each relevant one with its own evidence before synthesizing; include concrete artifacts, fields, checks, dates, exceptions, and decision criteria when available rather than only a generic framework.\n"
                     "- If memories conflict, prefer direct user constraints and observed facts in the same scope over inferred habits, assistant summaries, broader profiles, or generic knowledge.\n"
                     "- Keep scoped events separate from durable preferences; do not present something as always/usually preferred unless that scope is supported, and keep uncertainty pending when a remembered rule forbids guessing or inventing facts.\n"
+                    "- Memories with `type=\"link\"` only contain a URI because their full content was not included due to space limits. When a `type=\"link\"` memory is relevant to the user's question, call `openviking_multi_read` with the relevant URI or URIs before answering; do not answer from the URI alone."
                 )
+                # logger.warning(f"parts = {parts}")
             else:
                 self.latest_relevant_memories = None
 

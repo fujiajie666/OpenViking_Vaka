@@ -25,7 +25,7 @@ from vaka_utils import (
 
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
-DEFAULT_RESULT_DIR = SCRIPT_DIR / "result"
+DEFAULT_RESULT_DIR = SCRIPT_DIR / "result_test"
 DEFAULT_SUCCESS_CSV = str(DEFAULT_RESULT_DIR / "import_success.csv")
 DEFAULT_ERROR_LOG = str(DEFAULT_RESULT_DIR / "import_errors.log")
 DEFAULT_RECORD_PATH = str(DEFAULT_RESULT_DIR / ".ingest_record.json")
@@ -414,11 +414,18 @@ async def viking_ingest(
                 parts = msg["parts"]
             else:
                 parts = [{"type": "text", "text": msg["text"]}]
+            role_id = msg.get("role_id")
+            if not role_id:
+                if msg["role"] == "user":
+                    role_id = user_id
+                elif msg["role"] == "assistant":
+                    role_id = agent_id
             await client.add_message(
                 session_id=session_id,
                 role=msg["role"],
                 parts=parts,
                 created_at=msg.get("created_at"),
+                role_id=role_id,
             )
 
         result = await client.commit_session(session_id, telemetry=True)
