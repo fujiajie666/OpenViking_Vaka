@@ -41,12 +41,12 @@ class MemoryIsolationHandler:
         )
 
     def prepare_messages(self) -> None:
-        """开关关闭时，清空 messages 中的 role_id，使下游统一使用登录用户。"""
+        """开关关闭时，将 messages 中缺失的 role_id 回退到 ctx 中的登录用户。"""
         if self.enable_role_id_memory_isolate:
             return
         messages = self._extract_context.messages if self._extract_context else []
         for msg in messages:
-            msg.role_id = None
+            msg.role_id = self.ctx.resolve_role_id(msg.role, msg.role_id) if self.ctx else None
 
     def get_read_scope(self) -> RoleScope:
         user_ids = set()
@@ -102,16 +102,11 @@ class MemoryIsolationHandler:
                 agent_ids.add(role_scope.agent_ids[0])
 
         if item_dict.get("ranges") is None:
-            add_user_id(item_dict.get("user"))
             add_user_id(item_dict.get("user_id"))
             add_agent_id(item_dict.get("agent_id"))
             check_set_default()
             item_dict["user_id"] = list(user_ids)[0]
             item_dict["agent_id"] = list(agent_ids)[0]
-            if "user" in item_dict:
-                user_value = str(item_dict.get("user") or "").strip()
-                if not user_value or user_value not in role_scope.user_ids:
-                    item_dict["user"] = item_dict["user_id"]
 
         else:
             # 使用 ExtractContext 的方法解析 ranges
