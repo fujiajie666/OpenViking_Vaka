@@ -3,7 +3,7 @@
 Evaluates long-memory recall using two datasets:
 
 - **`data/vaka_locomo.csv`** — 405 rows of real work conversations, session 1-100. Sessions 1-70 are imported as memory; sessions 71-100 are not used directly.
-- **`data/vaka_judge.csv`** — 60 evaluation questions about user preferences/behaviour patterns, each with a `standard_answer` gold label.
+- **`data/vaka_judge.csv`** — 66 evaluation questions about user preferences/behaviour patterns, each with a `standard_answer` gold label.
 
 ## Case Split
 
@@ -13,6 +13,54 @@ Rows are grouped by global `session_id` into cases of 10 sessions each:
 - `session_id` 11-20 → `case_0002`
 - `session_id` 21-30 → `case_0003`
 - …
+
+## Configuration
+We use the following configuration for evaluating Vaka dataset, please notice that when run
+the run_eval.py script, we use gpt-5.4 for generating the answer.
+
+
+```bash
+{
+  "storage": {
+    "vectordb": {
+      "backend": "local",
+      "dimension": 2048,
+      "sparse_weight": 0.5
+    }
+  },
+  "embedding": {
+    "hybrid": {
+      "model": "doubao-embedding-vision-251215",
+      "api_key": "-",
+      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+      "provider": "volcengine",
+      "dimension": 2048,
+      "input": "multimodal"
+    },
+    "max_concurrent": 10
+  },
+  "vlm": {
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key": "-",
+    "provider": "volcengine",
+    "model": "doubao-seed-2-0-pro-260215",
+    "max_concurrent": 20
+  },
+  "memory": {
+    "custom_templates_dir": "benchmark/vaka/vikingbot/custom_memory_templates"
+  },
+  "rerank": {
+    "provider": "vikingdb",
+    "ak": "-",
+    "sk": "-",
+    "host": "api-vikingdb.vikingdb.cn-beijing.volces.com",
+    "model_name": "doubao-seed-rerank",
+    "model_version": "251028",
+    "threshold": 0.1
+  }
+}
+```
+
 
 ## Pipeline
 
