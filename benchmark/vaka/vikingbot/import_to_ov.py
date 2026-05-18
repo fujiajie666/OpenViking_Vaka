@@ -25,7 +25,7 @@ from vaka_utils import (
 
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
-DEFAULT_RESULT_DIR = SCRIPT_DIR / "result_test"
+DEFAULT_RESULT_DIR = SCRIPT_DIR / "result"
 DEFAULT_SUCCESS_CSV = str(DEFAULT_RESULT_DIR / "import_success.csv")
 DEFAULT_ERROR_LOG = str(DEFAULT_RESULT_DIR / "import_errors.log")
 DEFAULT_RECORD_PATH = str(DEFAULT_RESULT_DIR / ".ingest_record.json")

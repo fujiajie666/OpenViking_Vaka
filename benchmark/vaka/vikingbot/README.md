@@ -1,4 +1,4 @@
-# Vaka LoCoMo Benchmark
+# Vaka Benchmark
 
 Evaluates long-memory recall using two datasets:
 
@@ -70,9 +70,23 @@ caffeinate -i uv run python benchmark/vaka/vikingbot/run_eval.py \
     --parallel 3
 ```
 
-### Step 3 — Judge answers
+### step 3 - Clean up lines that failed (optional, execute before Judge).
 
-Requires `ARK_API_KEY` (Ark platform, `doubao-seed-2-0-pro-260215` model). Set it via `~/.openviking_benchmark_env`, the `ARK_API_KEY` env var, or `--token`. Re-running skips already-judged rows; add `--force` to re-judge everything.
+If there are rows in `vaka_qa_result.csv` where `response_input_tokens` is 0, 
+it means that although these issues were written to the results file, 
+the actual bot call failed or there were no valid token statistics. 
+These failed rows should be cleaned up and rerun the run_eval.py script before using the 
+Judge function.
+
+```bash
+uv run python benchmark/vaka/vikingbot/clean_failed_eval_rows.py --input benchmark/vaka/vikingbot/result/vaka_qa_result.csv
+```
+
+
+### Step 4 — Judge answers
+
+Requires `ARK_API_KEY` (Ark platform, three evaluation models). Set it via `~/.openviking_benchmark_env`, the `ARK_API_KEY` env var, or `--token`. Re-running skips already-judged rows; add `--force` to re-judge everything.
+You can also use openai-supported models for evaluating (e.g., gpt-5.4).
 
 ```bash
 uv run python benchmark/vaka/vikingbot/judge.py \
@@ -80,17 +94,9 @@ uv run python benchmark/vaka/vikingbot/judge.py \
     --parallel 10
 ```
 
-### Step 4 — Statistics
+### Step 5 — Statistics
 
 ```bash
 uv run python benchmark/vaka/vikingbot/stat_judge_result.py \
     --input benchmark/vaka/vikingbot/result/vaka_qa_result.csv
 ```
-
-## Notes
-
-- **`run_full_eval.sh` has known bugs** (wrong input file and unsupported flags passed to `run_eval.py`). Run the four steps above manually until those are fixed.
-- `run_eval.py` calls OpenViking live for each question — it does not reuse pre-computed answers from any CSV column.
-- The `identity` used in Step 1 (`user_id`, `agent_id`, `account`) must exactly match what `run_eval.py` uses in Step 2, otherwise the bot cannot retrieve the imported memory.
-- Steps 1 and 2 involve sustained network calls. On macOS, wrap with `caffeinate -i` to prevent system sleep from interrupting them.
-- If `judge_standard` is present in the eval CSV, `judge.py` uses it as a scoring rubric. If `standard_answer` is present, it grades against the gold answer. If both are empty, the judge evaluates coherence with prior memory context.
