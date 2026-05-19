@@ -45,6 +45,9 @@ uv run python benchmark/vaka/vikingbot/scripts/validate_query_vaka.py --mode evi
 # 只测试某一道题（query_index 从 0 开始，对应 CSV 中的第几行）
 uv run python benchmark/vaka/vikingbot/scripts/validate_query_vaka.py --query-index 0
 
+# 只测试某一道题，并在终端打印中间 generated_answer 和各 judge 结果
+uv run python benchmark/vaka/vikingbot/scripts/validate_query_vaka.py --query-index 0 --verbose
+
 # 只测试多道题
 uv run python benchmark/vaka/vikingbot/scripts/validate_query_vaka.py --query-index 0 5 12
 
@@ -106,6 +109,7 @@ uv run python benchmark/vaka/vikingbot/scripts/validate_query_vaka.py --output /
 | `--mode` | `full` | 上下文模式：`full` 使用全部 session 1-70 对话；`evidence` 使用 locomo 中的 `complete_evidence_dialogue_with_model` 列作为每题的精简上下文 |
 | `--query-index` | None | 只处理指定的问题序号（0-based），如 `--query-index 0 5 12` |
 | `--force` | False | 强制重新处理已有结果 |
+| `--verbose` | False | 在终端打印中间 `generated_answer` 和各 judge 模型结果 |
 
 ## 如何使用结果
 

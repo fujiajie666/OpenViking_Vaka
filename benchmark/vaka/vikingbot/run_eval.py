@@ -355,6 +355,31 @@ async def run_eval(args: argparse.Namespace) -> None:
     output_path = Path(args.output).expanduser()
     os.makedirs(output_path.parent, exist_ok=True)
 
+    # --force 时，先移除本次目标题目的旧结果，之后重新生成并追加新结果。
+    force_indices = {orig_idx for orig_idx, _ in qa_list} if args.force else set()
+    if force_indices and output_path.exists():
+        kept_rows: list[dict] = []
+        removed_count = 0
+        with open(output_path, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                idx_str = row.get("question_index", "")
+                try:
+                    row_idx = int(idx_str)
+                except ValueError:
+                    row_idx = None
+                if row_idx in force_indices:
+                    removed_count += 1
+                    continue
+                kept_rows.append({field: row.get(field, "") for field in FIELDNAMES})
+
+        with open(output_path, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
+            writer.writeheader()
+            writer.writerows(kept_rows)
+        if removed_count:
+            print(f"Force rerun: removed {removed_count} existing row(s) from {output_path}")
+
     # 读取已完成的 question_index，支持断点续跑
     completed_indices: set[int] = set()
     if output_path.exists():
@@ -466,9 +491,9 @@ def main() -> None:
         help="OpenViking API key (X-API-Key header), default: empty",
     )
     parser.add_argument(
-        "--update-mode",
+        "--force",
         action="store_true",
-        help="Update mode: if output file exists, update matching rows instead of overwriting",
+        help="Rerun selected questions and replace their existing rows in the output CSV.",
     )
     parser.add_argument(
         "--allow-memory-commit",

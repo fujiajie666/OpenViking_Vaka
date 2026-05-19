@@ -185,7 +185,7 @@ async def grade_answer(
 
 
 MODEL_LABELS = {
-    "ep-20260423162207-qfqr8": "doubao",
+    "ep-20260514141842-c7s2n": "doubao",
     "ep-20260501105042-9kp5v": "deepseek",
     "ep-20260501104936-72vfz": "glm",
 }
@@ -264,13 +264,13 @@ async def main() -> None:
     )
     parser.add_argument(
         "--answer-model",
-        default="ep-20260423162207-qfqr8",
+        default="ep-20260514141842-c7s2n",
         help="Model for generating answers",
     )
     parser.add_argument(
         "--judge-models",
         nargs="+",
-        default=["ep-20260423162207-qfqr8", "ep-20260501104936-72vfz", "ep-20260501105042-9kp5v"],
+        default=["ep-20260514141842-c7s2n", "ep-20260501104936-72vfz", "ep-20260501105042-9kp5v"],
         help="Judge model names (3-model ensemble, majority vote)",
     )
     parser.add_argument(
@@ -287,6 +287,11 @@ async def main() -> None:
         help="Only process specific query indices (0-based), e.g. --query-index 0 5 12",
     )
     parser.add_argument("--force", action="store_true", help="Re-process even if result exists")
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print generated answers and per-model judge results while running",
+    )
     args = parser.parse_args()
 
     if not args.token:
@@ -385,9 +390,12 @@ async def main() -> None:
         async with file_lock:
             temp_file = f"{args.output}.tmp"
             with open(temp_file, "w", encoding="utf-8", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=output_fieldnames)
+                writer = csv.DictWriter(f, fieldnames=output_fieldnames, extrasaction="ignore")
                 writer.writeheader()
-                writer.writerows(result_rows)
+                writer.writerows(
+                    {field: row.get(field, "") for field in output_fieldnames}
+                    for row in result_rows
+                )
             os.replace(temp_file, args.output)
 
     async def process_row(idx: int) -> None:
@@ -418,6 +426,11 @@ async def main() -> None:
             row["generated_answer"] = answer
             row["answer_input_tokens"] = str(ans_inp)
             row["answer_output_tokens"] = str(ans_out)
+            await save_results()
+            if args.verbose:
+                print(f"\n--- Generated answer for Q{qi} ---")
+                print(answer)
+                print("--- End generated answer ---\n")
 
             # Step 2: Grade answer
             is_correct, reasoning, judge_inp, judge_out, per_model = await grade_answer_ensemble(
@@ -429,12 +442,19 @@ async def main() -> None:
             )
             row["is_correct"] = "CORRECT" if is_correct else "WRONG"
             for col, val in per_model.items():
-                row[col] = "CORRECT" if val else "WRONG"
+                if col in output_fieldnames:
+                    row[col] = "CORRECT" if val else "WRONG"
             row["reasoning"] = reasoning
             row["judge_input_tokens"] = str(judge_inp)
             row["judge_output_tokens"] = str(judge_out)
 
             await save_results()
+            if args.verbose:
+                judge_results = []
+                for col in ("is_correct_doubao", "is_correct_glm", "is_correct_deepseek"):
+                    label = col.replace("is_correct_", "")
+                    judge_results.append(f"{label}={row.get(col, '') or 'N/A'}")
+                print(f"  Judges: {', '.join(judge_results)}")
             print(f"  -> {row['is_correct']} | {reasoning[:80]}")
 
     await asyncio.gather(*(process_row(idx) for idx in to_process))
