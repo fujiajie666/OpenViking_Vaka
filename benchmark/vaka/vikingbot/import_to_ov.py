@@ -26,9 +26,6 @@ from vaka_utils import (
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DEFAULT_RESULT_DIR = SCRIPT_DIR / "result"
-DEFAULT_SUCCESS_CSV = str(DEFAULT_RESULT_DIR / "import_success.csv")
-DEFAULT_ERROR_LOG = str(DEFAULT_RESULT_DIR / "import_errors.log")
-DEFAULT_RECORD_PATH = str(DEFAULT_RESULT_DIR / ".ingest_record.json")
 DEFAULT_USER_ID = "default"
 DEFAULT_AGENT_ID = "default"
 
@@ -685,19 +682,25 @@ def main() -> None:
         help=f"OpenViking agent_id for all imported Vaka memory, default: {DEFAULT_AGENT_ID}",
     )
     parser.add_argument(
+        "--output",
+        default=None,
+        help="Output directory for result files (success CSV, error log, ingest record). "
+        "Overrides DEFAULT_RESULT_DIR. Individual --success-csv/--error-log/--record-path still take precedence if specified.",
+    )
+    parser.add_argument(
         "--success-csv",
-        default=DEFAULT_SUCCESS_CSV,
-        help=f"Path to success CSV, default: {DEFAULT_SUCCESS_CSV}",
+        default=None,
+        help="Path to success CSV, default: <output>/import_success.csv",
     )
     parser.add_argument(
         "--error-log",
-        default=DEFAULT_ERROR_LOG,
-        help=f"Path to error log, default: {DEFAULT_ERROR_LOG}",
+        default=None,
+        help="Path to error log, default: <output>/import_errors.log",
     )
     parser.add_argument(
         "--record-path",
-        default=DEFAULT_RECORD_PATH,
-        help=f"Path to ingest record JSON, default: {DEFAULT_RECORD_PATH}",
+        default=None,
+        help="Path to ingest record JSON, default: <output>/.ingest_record.json",
     )
     parser.add_argument(
         "--force-ingest",
@@ -715,6 +718,15 @@ def main() -> None:
         help="Do not set OpenViking user_id or agent_id on the client",
     )
     args = parser.parse_args()
+
+    # Resolve output directory: --output overrides DEFAULT_RESULT_DIR
+    result_dir = Path(args.output) if args.output else DEFAULT_RESULT_DIR
+    if args.success_csv is None:
+        args.success_csv = str(result_dir / "import_success.csv")
+    if args.error_log is None:
+        args.error_log = str(result_dir / "import_errors.log")
+    if args.record_path is None:
+        args.record_path = str(result_dir / ".ingest_record.json")
 
     if args.case_size <= 0:
         raise ValueError("--case-size must be positive")
