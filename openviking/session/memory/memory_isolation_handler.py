@@ -41,12 +41,12 @@ class MemoryIsolationHandler:
         )
 
     def prepare_messages(self) -> None:
-        """开关关闭时，规范化 messages 中的 role_id，缺失时回退到登录身份。"""
+        """开关关闭时，忽略 messages 中的 role_id，统一回退到请求身份。"""
         if self.role_id_memory_isolation_enabled:
             return
         messages = self._extract_context.messages if self._extract_context else []
         for msg in messages:
-            msg.role_id = self.ctx.resolve_role_id(msg.role, msg.role_id) if self.ctx else None
+            msg.role_id = None
 
     def get_read_scope(self) -> RoleScope:
         user_ids = set()
