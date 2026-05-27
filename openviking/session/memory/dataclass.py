@@ -163,6 +163,7 @@ class MemoryTypeSchema(BaseModel):
     content_template: Optional[str] = Field(
         None, description="Content template (for template mode)"
     )
+    embedding_template: Optional[str] = Field(None, description="Embedding text template")
     directory: str = Field("", description="Directory path")
     enabled: bool = Field(True, description="Whether this memory type is enabled")
     operation_mode: str = Field(
