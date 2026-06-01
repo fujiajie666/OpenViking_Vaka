@@ -9,6 +9,7 @@ near semantic seeds in the graph and supported by query/content overlap.
 
 import math
 import re
+from dataclasses import dataclass
 from typing import Any, Dict, List
 
 from openviking.retrieve.graph.graph_index import GraphIndex
@@ -29,10 +30,22 @@ _MAX_SEMANTIC_SEEDS = 12
 _GRAPH_SCORING_POOL_FACTOR = 4
 _MIN_GRAPH_SUPPORT = 1e-12
 _MIN_QUERY_EVIDENCE = 0.16
+_MIN_OWN_QUERY_EVIDENCE = 0.08
+_EDGE_EVIDENCE_WEIGHT = 0.35
+_URI_EVIDENCE_WEIGHT = 0.20
+_CATEGORY_EVIDENCE_WEIGHT = 0.10
 _GRAPH_SCORE_CEILING_FRACTION = 0.25
-_GRAPH_RETRIEVER_STRATEGY = "evidence_gated_append_v1"
+_GRAPH_RETRIEVER_STRATEGY = "evidence_gated_append_v2"
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
+_CURRENT_DATE_PREFIX_RE = re.compile(
+    r"^\s*current\s+date\s*:\s*\d{4}-\d{2}-\d{2}\s*\.\s*",
+    re.IGNORECASE,
+)
+_ANSWER_DIRECTLY_PREFIX_RE = re.compile(
+    r"^\s*answer\s+the\s+question\s+directly\s*:\s*",
+    re.IGNORECASE,
+)
 _QUERY_STOPWORDS = {
     "a",
     "about",
@@ -99,6 +112,15 @@ _QUERY_STOPWORDS = {
     "you",
     "your",
 }
+
+
+@dataclass(frozen=True)
+class GraphEvidenceSignals:
+    own: float = 0.0
+    edge: float = 0.0
+    uri: float = 0.0
+    category: float = 0.0
+    combined: float = 0.0
 
 
 class GraphRetriever:
@@ -334,7 +356,7 @@ class GraphRetriever:
         norm_ppr = minmax_normalize(
             {candidate["uri"]: candidate.get("_ppr_score", 0.0) for candidate in candidates}
         )
-        query_evidence = self._compute_query_evidence(candidates, query_text)
+        query_evidence = self._compute_query_evidence_signals(candidates, query_text)
 
         semantic_scores = sorted(
             (
@@ -358,8 +380,13 @@ class GraphRetriever:
         for candidate in candidates:
             uri = candidate.get("uri", "")
             semantic_score = self._candidate_semantic_score(candidate)
+            evidence_signals = query_evidence.get(uri, GraphEvidenceSignals())
             candidate["_norm_ppr"] = norm_ppr.get(uri, 0.0)
-            candidate["_graph_query_evidence"] = query_evidence.get(uri, 0.0)
+            candidate["_graph_query_evidence"] = evidence_signals.combined
+            candidate["_graph_evidence_own"] = evidence_signals.own
+            candidate["_graph_evidence_edge"] = evidence_signals.edge
+            candidate["_graph_evidence_uri"] = evidence_signals.uri
+            candidate["_graph_evidence_category"] = evidence_signals.category
             candidate["_graph_strategy"] = _GRAPH_RETRIEVER_STRATEGY
 
             if not candidate.get("_from_graph"):
@@ -373,10 +400,11 @@ class GraphRetriever:
                 0.7 * candidate.get("_norm_graph_support", 0.0)
                 + 0.3 * norm_ppr.get(uri, 0.0)
             ) * candidate.get("_graph_specificity", 1.0)
-            evidence = query_evidence.get(uri, 0.0)
+            evidence = evidence_signals.combined
             accepted = (
                 support > _MIN_GRAPH_SUPPORT
                 and path_signal > 0
+                and evidence_signals.own >= _MIN_OWN_QUERY_EVIDENCE
                 and evidence >= _MIN_QUERY_EVIDENCE
             )
             graph_boost = (
@@ -461,31 +489,34 @@ class GraphRetriever:
         candidate["_graph_support"] = support_scores.get(uri, 0.0)
         candidate["_norm_graph_support"] = norm_support.get(uri, 0.0)
 
-    def _compute_query_evidence(
+    def _compute_query_evidence_signals(
         self,
         candidates: List[Dict[str, Any]],
         query_text: str | None,
-    ) -> Dict[str, float]:
-        """Return IDF-weighted query/content overlap for each candidate."""
-        query_tokens = self._tokenize(query_text or "")
+    ) -> Dict[str, GraphEvidenceSignals]:
+        """Return separated IDF-weighted query evidence signals."""
+        query_tokens = self._tokenize(self._normalize_graph_query(query_text))
         if not query_tokens:
-            return {candidate.get("uri", ""): 0.0 for candidate in candidates}
+            return {candidate.get("uri", ""): GraphEvidenceSignals() for candidate in candidates}
 
-        doc_tokens: Dict[str, set[str]] = {}
+        signal_tokens_by_uri: Dict[str, Dict[str, set[str]]] = {}
+        combined_tokens_by_uri: Dict[str, set[str]] = {}
         for candidate in candidates:
             uri = candidate.get("uri", "")
             if not uri:
                 continue
-            doc_tokens[uri] = self._candidate_tokens(candidate)
+            signal_tokens = self._candidate_signal_tokens(candidate)
+            signal_tokens_by_uri[uri] = signal_tokens
+            combined_tokens_by_uri[uri] = set().union(*signal_tokens.values())
 
-        if not doc_tokens:
+        if not combined_tokens_by_uri:
             return {}
 
-        doc_count = len(doc_tokens)
+        doc_count = len(combined_tokens_by_uri)
         document_frequency: Dict[str, int] = {}
         for token in query_tokens:
             document_frequency[token] = sum(
-                1 for tokens in doc_tokens.values() if token in tokens
+                1 for tokens in combined_tokens_by_uri.values() if token in tokens
             )
         token_weights = {
             token: math.log((doc_count + 1) / (document_frequency[token] + 1)) + 1.0
@@ -493,28 +524,65 @@ class GraphRetriever:
         }
         total_weight = sum(token_weights.values())
         if total_weight <= 0:
-            return {uri: 0.0 for uri in doc_tokens}
+            return {uri: GraphEvidenceSignals() for uri in combined_tokens_by_uri}
 
-        evidence: Dict[str, float] = {}
-        for uri, tokens in doc_tokens.items():
-            overlap_weight = sum(
-                token_weights[token] for token in query_tokens if token in tokens
+        evidence: Dict[str, GraphEvidenceSignals] = {}
+        for uri, signal_tokens in signal_tokens_by_uri.items():
+            own = self._weighted_query_overlap(
+                query_tokens, signal_tokens["own"], token_weights, total_weight
             )
-            evidence[uri] = min(1.0, overlap_weight / total_weight)
+            edge = self._weighted_query_overlap(
+                query_tokens, signal_tokens["edge"], token_weights, total_weight
+            )
+            uri_signal = self._weighted_query_overlap(
+                query_tokens, signal_tokens["uri"], token_weights, total_weight
+            )
+            category = self._weighted_query_overlap(
+                query_tokens, signal_tokens["category"], token_weights, total_weight
+            )
+            combined = min(
+                1.0,
+                own
+                + _EDGE_EVIDENCE_WEIGHT * edge
+                + _URI_EVIDENCE_WEIGHT * uri_signal
+                + _CATEGORY_EVIDENCE_WEIGHT * category,
+            )
+            evidence[uri] = GraphEvidenceSignals(
+                own=own,
+                edge=edge,
+                uri=uri_signal,
+                category=category,
+                combined=combined,
+            )
         return evidence
 
-    def _candidate_tokens(self, candidate: Dict[str, Any]) -> set[str]:
-        text = " ".join(
-            str(part or "")
-            for part in (
-                candidate.get("uri", ""),
-                candidate.get("abstract", ""),
-                candidate.get("category", ""),
-                candidate.get("memory_type", ""),
-                self._edge_evidence_text(candidate.get("uri", "")),
-            )
+    @staticmethod
+    def _weighted_query_overlap(
+        query_tokens: set[str],
+        doc_tokens: set[str],
+        token_weights: Dict[str, float],
+        total_weight: float,
+    ) -> float:
+        if total_weight <= 0:
+            return 0.0
+        overlap_weight = sum(
+            token_weights[token] for token in query_tokens if token in doc_tokens
         )
-        return self._tokenize(text)
+        return min(1.0, overlap_weight / total_weight)
+
+    def _candidate_signal_tokens(self, candidate: Dict[str, Any]) -> Dict[str, set[str]]:
+        uri = candidate.get("uri", "")
+        return {
+            "own": self._tokenize(candidate.get("abstract", "")),
+            "edge": self._tokenize(self._edge_evidence_text(uri)),
+            "uri": self._tokenize(uri),
+            "category": self._tokenize(
+                " ".join(
+                    str(candidate.get(key, "") or "")
+                    for key in ("category", "memory_type")
+                )
+            ),
+        }
 
     def _edge_evidence_text(self, uri: str) -> str:
         parts: List[str] = []
@@ -533,6 +601,13 @@ class GraphRetriever:
             for token in _TOKEN_RE.findall(text.lower())
             if len(token) > 1 and token not in _QUERY_STOPWORDS
         }
+
+    @staticmethod
+    def _normalize_graph_query(query_text: str | None) -> str:
+        text = query_text or ""
+        text = _CURRENT_DATE_PREFIX_RE.sub("", text)
+        text = _ANSWER_DIRECTLY_PREFIX_RE.sub("", text)
+        return text.strip()
 
     def _node_degree(self, uri: str) -> int:
         if not self._graph_index.has_node(uri):

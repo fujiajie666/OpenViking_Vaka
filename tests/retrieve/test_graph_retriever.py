@@ -203,6 +203,79 @@ def test_unaligned_graph_candidate_is_filtered():
     ]
 
 
+def test_eval_wrapper_current_date_does_not_accept_graph_candidate():
+    retriever = GraphRetriever(_build_test_index(), RetrievalConfig(graph_alpha=0.4))
+    candidates = [
+        {"uri": "viking://top", "_final_score": 0.9, "_score": 0.9},
+        {"uri": "viking://weak", "_final_score": 0.6, "_score": 0.6},
+        {
+            "uri": "viking://user/u/memories/events/2023/10/22/adoption.md",
+            "_final_score": 0.0,
+            "_score": 0.0,
+            "_from_graph": True,
+            "_ppr_score": 1.0,
+            "_graph_support": 1.0,
+            "_norm_graph_support": 1.0,
+            "_graph_specificity": 1.0,
+            "abstract": "Caroline passed adoption interviews on 2023-10-22.",
+        },
+    ]
+
+    scored = retriever._score_graph_candidates(
+        candidates,
+        query_text=(
+            "Current date: 2023-10-22. "
+            "Answer the question directly: What books has Melanie read?"
+        ),
+        limit=2,
+    )
+    filtered = retriever._filter_unaccepted_graph_nodes(scored)
+    by_uri = {candidate["uri"]: candidate for candidate in scored}
+
+    assert by_uri["viking://user/u/memories/events/2023/10/22/adoption.md"][
+        "_graph_evidence_own"
+    ] == 0.0
+    assert [candidate["uri"] for candidate in filtered] == [
+        "viking://top",
+        "viking://weak",
+    ]
+
+
+def test_edge_evidence_alone_does_not_accept_graph_candidate():
+    retriever = GraphRetriever(_build_test_index(), RetrievalConfig(graph_alpha=0.4))
+    candidates = [
+        {"uri": "viking://top", "_final_score": 0.9, "_score": 0.9},
+        {"uri": "viking://weak", "_final_score": 0.6, "_score": 0.6},
+        {
+            "uri": "viking://node2",
+            "_final_score": 0.0,
+            "_score": 0.0,
+            "_from_graph": True,
+            "_ppr_score": 1.0,
+            "_graph_support": 1.0,
+            "_norm_graph_support": 1.0,
+            "_graph_specificity": 1.0,
+            "abstract": "A generic weekend planning note.",
+        },
+    ]
+
+    scored = retriever._score_graph_candidates(
+        candidates,
+        query_text="What aspect of autumn did Andrew find beautiful?",
+        limit=2,
+    )
+    filtered = retriever._filter_unaccepted_graph_nodes(scored)
+    by_uri = {candidate["uri"]: candidate for candidate in scored}
+
+    assert by_uri["viking://node2"]["_graph_evidence_edge"] > 0
+    assert by_uri["viking://node2"]["_graph_evidence_own"] == 0.0
+    assert by_uri["viking://node2"]["_graph_accepted"] is False
+    assert [candidate["uri"] for candidate in filtered] == [
+        "viking://top",
+        "viking://weak",
+    ]
+
+
 def test_query_aligned_graph_candidate_can_enter_below_semantic_ceiling():
     retriever = GraphRetriever(_build_test_index(), RetrievalConfig(graph_alpha=0.4))
     candidates = [
