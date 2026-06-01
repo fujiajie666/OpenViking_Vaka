@@ -124,18 +124,20 @@ def init_viking_fs(
     timeout: int = 10,
     enable_recorder: bool = False,
     encryptor: Optional[Any] = None,
+
+    memory_config: Optional[Any] = None,
 ) -> "VikingFS":
     """Initialize VikingFS singleton.
 
     Args:
         agfs: Pre-initialized AGFS client (HTTP or Binding)
-        agfs_config: AGFS configuration object for backend settings
         query_embedder: Embedder instance
         rerank_config: Rerank configuration
         retrieval_config: Retrieval ranking configuration
         vector_store: Vector store instance
         enable_recorder: Whether to enable IO recording
         encryptor: FileEncryptor instance for encryption/decryption
+        memory_config: Memory configuration (for link_enabled gate)
     """
     global _instance
 
@@ -146,6 +148,7 @@ def init_viking_fs(
         vector_store=vector_store,
         retrieval_config=retrieval_config,
         encryptor=encryptor,
+        memory_config=memory_config,
     )
 
     if enable_recorder:
@@ -219,6 +222,7 @@ class VikingFS:
         retrieval_config: Optional["RetrievalConfig"] = None,
         timeout: int = 10,
         encryptor: Optional[Any] = None,
+        memory_config: Optional[Any] = None,
     ):
         self.agfs = agfs
         self._async_agfs = AsyncAGFSClient(agfs)
@@ -226,6 +230,7 @@ class VikingFS:
         self.rerank_config = rerank_config
         self.vector_store = vector_store
         self.retrieval_config = retrieval_config
+        self.memory_config = memory_config
         self._encryptor = encryptor
         self._bound_ctx: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
             "vikingfs_bound_ctx", default=None
@@ -1407,6 +1412,7 @@ class VikingFS:
             embedder=embedder,
             rerank_config=self.rerank_config,
             retrieval_config=self.retrieval_config,
+            memory_config=self.memory_config,
         )
 
         # Infer context_type (None = search all types)
@@ -1568,6 +1574,7 @@ class VikingFS:
             embedder=embedder,
             rerank_config=self.rerank_config,
             retrieval_config=self.retrieval_config,
+            memory_config=self.memory_config,
         )
 
         async def _execute(tq: TypedQuery):

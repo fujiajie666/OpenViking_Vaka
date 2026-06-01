@@ -27,7 +27,7 @@ for arg in "$@"; do
         echo "  --skip-import     跳过导入步骤，直接使用已导入的数据进行评测"
         echo "  --group-chat      群聊模式，设置 role_id/speaker，传 --memory-user"
         echo "  --auto-commit     自动提交未提交的代码变更，结果文件名带 commit id 和时间戳"
-        echo "  --retry-wrong CSV 只重跑指定结果文件中的有效错题（导入相关对话+重新问答）"
+        echo "  --retry-wrong CSV 只重跑指定结果文件中的有效错题（默认导入相关对话+重新问答）"
         exit 0
     fi
 done
@@ -184,17 +184,21 @@ if [ -n "$RETRY_WRONG" ]; then
     fi
 
     # 从错题 CSV 中提取需要导入的对话（复用 import_to_ov.py 的并行逻辑）
-    echo "[1/3] 导入错题相关对话..."
-    "$PYTHON_BIN" "$SCRIPT_DIR/import_to_ov.py" \
-        --input "$INPUT_FILE" \
-        --retry-wrong "$RETRY_WRONG" \
-        --force-ingest \
-        --account "$ACCOUNT" \
-        --openviking-url "$OPENVIKING_URL" \
-        "${COMMON_OPTS[@]}"
+    if [ "$SKIP_IMPORT" = "true" ]; then
+        echo "[1/3] 跳过导入错题相关对话..."
+    else
+        echo "[1/3] 导入错题相关对话..."
+        "$PYTHON_BIN" "$SCRIPT_DIR/import_to_ov.py" \
+            --input "$INPUT_FILE" \
+            --retry-wrong "$RETRY_WRONG" \
+            --force-ingest \
+            --account "$ACCOUNT" \
+            --openviking-url "$OPENVIKING_URL" \
+            "${COMMON_OPTS[@]}"
 
-    echo "等待数据处理完成..."
-    sleep 30
+        echo "等待数据处理完成..."
+        sleep 30
+    fi
 
     # 评估错题
     echo "[2/3] 重新评估错题..."

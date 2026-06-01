@@ -287,6 +287,7 @@ class OpenVikingService:
             retrieval_config=config.retrieval,
             enable_recorder=enable_recorder,
             encryptor=self._encryptor,
+            memory_config=config.memory,
         )
         if enable_recorder:
             logger.info("VikingFS IO Recorder enabled")

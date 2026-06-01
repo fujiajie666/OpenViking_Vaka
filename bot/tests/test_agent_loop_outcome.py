@@ -8,12 +8,25 @@ from vikingbot.bus.events import InboundMessage, OutboundEventType
 from vikingbot.bus.queue import MessageBus
 from vikingbot.config.schema import Config, SessionKey
 from vikingbot.heartbeat.service import HEARTBEAT_METADATA_KEY
-from vikingbot.providers.base import LLMProvider
+from vikingbot.providers.base import LLMProvider, LLMResponse
 
 
 class _FakeProvider(LLMProvider):
     async def chat(self, *args, **kwargs):  # pragma: no cover - should not be called
         raise AssertionError("provider.chat should not be called in no-reply outcome test")
+
+    def get_default_model(self) -> str:
+        return "fake-model"
+
+
+class _RecordingProvider(LLMProvider):
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+
+    async def chat(self, *args, **kwargs):
+        self.calls.append(kwargs)
+        return LLMResponse(content="final answer")
 
     def get_default_model(self) -> str:
         return "fake-model"
@@ -202,3 +215,74 @@ async def test_agent_loop_emits_normalized_response_completed_payload(temp_dir: 
     session_path = temp_dir / "bot" / "sessions" / "cli__default__session-1.jsonl"
     metadata = json.loads(session_path.read_text().splitlines()[0])
     assert metadata["metadata"]["response_facts"][response.response_id] == payload
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_eval_mode_disables_memory_commit_tool(temp_dir: Path, monkeypatch):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    captured = {}
+
+    async def fake_run_agent_loop(self, **kwargs):
+        captured["disabled_tools"] = kwargs["disabled_tools"]
+        return (
+            "final answer",
+            None,
+            [],
+            {"prompt_tokens": 1, "completion_tokens": 1},
+            1,
+        )
+
+    monkeypatch.setattr(AgentLoop, "_run_agent_loop", fake_run_agent_loop)
+
+    bus = MessageBus()
+    config = Config(storage_workspace=str(temp_dir))
+    loop = AgentLoop(
+        bus=bus,
+        provider=_FakeProvider(),
+        workspace=temp_dir / "workspace",
+        config=config,
+        eval=True,
+    )
+
+    response = await loop._process_message(
+        InboundMessage(
+            session_key=SessionKey(type="cli", channel_id="default", chat_id="session-1"),
+            sender_id="user-1",
+            content="please answer",
+            metadata={"disabled_tools": ["read_file"]},
+            timestamp=datetime.fromisoformat("2026-04-30T00:05:00"),
+        )
+    )
+
+    assert response is not None
+    assert captured["disabled_tools"] == ["read_file", "openviking_memory_commit"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("eval_mode", "temperature"), [(False, 0.7), (True, 0.0)])
+async def test_agent_loop_eval_mode_uses_deterministic_temperature(
+    temp_dir: Path, monkeypatch, eval_mode: bool, temperature: float
+):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    provider = _RecordingProvider()
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=temp_dir / "workspace",
+        config=Config(storage_workspace=str(temp_dir)),
+        eval=eval_mode,
+    )
+
+    await loop._run_agent_loop(
+        messages=[{"role": "user", "content": "please answer"}],
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="session-1"),
+        publish_events=False,
+    )
+
+    assert provider.calls[0]["temperature"] == temperature

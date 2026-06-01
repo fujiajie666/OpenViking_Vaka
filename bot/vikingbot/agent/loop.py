@@ -34,6 +34,8 @@ from vikingbot.session.manager import Session, SessionManager
 from vikingbot.utils.helpers import cal_str_tokens
 from vikingbot.utils.tracing import set_response_id, trace
 
+EVAL_DISABLED_TOOLS = ("openviking_memory_commit",)
+
 if TYPE_CHECKING:
     from vikingbot.config.schema import ExecToolConfig
     from vikingbot.cron.service import CronService
@@ -231,6 +233,21 @@ class AgentLoop:
             cron_service=self.cron_service,
         )
 
+    @staticmethod
+    def _normalize_disabled_tools(disabled_tools: Any, eval_mode: bool) -> list[str]:
+        """Return request-scoped disabled tools, adding eval-only write guards."""
+        if isinstance(disabled_tools, list):
+            normalized = [tool for tool in disabled_tools if isinstance(tool, str)]
+        else:
+            normalized = []
+
+        if eval_mode:
+            for tool in EVAL_DISABLED_TOOLS:
+                if tool not in normalized:
+                    normalized.append(tool)
+
+        return normalized
+
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
         self._running = True
@@ -299,6 +316,7 @@ class AgentLoop:
             "total_tokens": 0,
         }
         write_exp_injected = False
+        disabled_tool_set = set(disabled_tools or [])
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -319,6 +337,7 @@ class AgentLoop:
                     disabled_tools=disabled_tools,
                 ),
                 model=self.model,
+                temperature=0.0 if self._eval else 0.7,
                 session_id=session_key.safe_name(),
             )
             if response.usage:
@@ -388,6 +407,15 @@ class AgentLoop:
                 async def execute_single_tool(idx: int, tool_call):
                     """Execute a single tool and track execution time."""
                     tool_execute_start_time = time.time()
+                    if tool_call.name in disabled_tool_set:
+                        duration = (time.time() - tool_execute_start_time) * 1000
+                        return (
+                            idx,
+                            tool_call,
+                            f"Error: Tool '{tool_call.name}' is disabled for this request",
+                            duration,
+                        )
+
                     result = await self.tools.execute(
                         tool_call.name,
                         tool_call.arguments,
@@ -527,9 +555,10 @@ class AgentLoop:
             session = self.sessions.get_or_create(session_key, skip_heartbeat=skip_heartbeat)
 
             ov_tools_enable = self._get_ov_tools_enable(session_key)
-            disabled_tools = msg.metadata.get("disabled_tools", []) if msg.metadata else []
-            if not isinstance(disabled_tools, list):
-                disabled_tools = []
+            disabled_tools = self._normalize_disabled_tools(
+                msg.metadata.get("disabled_tools", []) if msg.metadata else [],
+                eval_mode=self._eval,
+            )
             # Get profile_user_list from channel config
             profile_user_list = []
             # Try to get memory_users from message metadata first (CLI mode), then from channel config

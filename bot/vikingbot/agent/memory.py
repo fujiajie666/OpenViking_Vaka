@@ -53,8 +53,17 @@ class MemoryStore:
         def get_abstract(m):
             return m.get("abstract", "") if isinstance(m, dict) else getattr(m, "abstract", "")
 
+        def get_match_reason(m):
+            return (
+                m.get("match_reason", "")
+                if isinstance(m, dict)
+                else getattr(m, "match_reason", "")
+            )
+
         filtered_memories = [memory for memory in result if get_score(memory) >= min_score]
         filtered_memories.sort(key=get_score, reverse=True)
+        graph_snippet_memories = [memory for memory in filtered_memories if get_match_reason(memory)]
+        filtered_memories = [memory for memory in filtered_memories if not get_match_reason(memory)]
 
         user_memories = []
         total_chars = 0
@@ -117,6 +126,34 @@ class MemoryStore:
                 )
                 user_memories.append(memory_str)
                 # Don't count link-only towards max_chars
+
+        graph_snippet_chars = 0
+        graph_snippet_budget = 800
+        graph_snippet_count = 0
+        next_index = len(user_memories) + 1
+        for memory in graph_snippet_memories:
+            if graph_snippet_count >= 3:
+                break
+            uri = get_uri(memory)
+            abstract = " ".join(get_abstract(memory).split())
+            if not uri or not abstract:
+                continue
+            if len(abstract) > 360:
+                abstract = abstract[:357].rstrip() + "..."
+            score = get_score(memory)
+            memory_str = (
+                f'<memory index="{next_index}" type="graph_snippet">\n'
+                f"  <uri>{uri}</uri>\n"
+                f"  <score>{score}</score>\n"
+                f"  <content>{abstract}</content>\n"
+                f"</memory>"
+            )
+            if graph_snippet_chars + len(memory_str) > graph_snippet_budget:
+                break
+            user_memories.append(memory_str)
+            graph_snippet_chars += len(memory_str)
+            graph_snippet_count += 1
+            next_index += 1
 
         return "\n".join(user_memories)
 

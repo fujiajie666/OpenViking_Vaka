@@ -82,6 +82,10 @@ class SingleTurnChannel(BaseChannel):
         try:
             await asyncio.wait_for(self._response_received.wait(), timeout=3000.0)
             if self._last_response:
+                if self._eval:
+                    print(self._last_response)
+                    return
+
                 from rich.markdown import Markdown
                 from rich.text import Text
 
@@ -101,13 +105,13 @@ class SingleTurnChannel(BaseChannel):
         """Send a message - store final response for later retrieval."""
         if msg.is_normal_message:
             if self._eval:
-                content = msg.content.replace('"', "'") if msg.content else ""
                 output = {
-                    "text": content,
+                    "text": msg.content or "",
                     "token_usage": msg.token_usage,
                     "time_cost": msg.time_cost,
                     "iteration": msg.iteration,
                     "tools_used_names": msg.tools_used_names,
+                    "relevant_memories": (msg.metadata or {}).get("relevant_memories"),
                 }
                 msg.content = json.dumps(output, ensure_ascii=False)
             self._last_response = msg.content

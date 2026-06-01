@@ -9,6 +9,130 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import unquote
+
+
+MEMORY_FIELD_HINTS = (
+    "memory",
+    "memories",
+    "retriev",
+)
+
+
+def _contains_memory_signal(value) -> bool:
+    """Return whether a JSON value looks like retrieved memory/debug payload."""
+    if isinstance(value, str):
+        return "viking://" in value or "<memory" in value or "memories" in value
+    if isinstance(value, list):
+        return any(_contains_memory_signal(item) for item in value)
+    if isinstance(value, dict):
+        return any(_contains_memory_signal(item) for item in value.values())
+    return False
+
+
+def _collect_memory_debug_fields(value, path: str = "") -> dict:
+    """Collect fields likely to contain retrieved memories from a response JSON."""
+    fields = {}
+    if isinstance(value, dict):
+        for key, item in value.items():
+            key_path = f"{path}.{key}" if path else key
+            key_lower = key.lower()
+            if any(hint in key_lower for hint in MEMORY_FIELD_HINTS) and _contains_memory_signal(
+                item
+            ):
+                fields[key_path] = item
+            fields.update(_collect_memory_debug_fields(item, key_path))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            fields.update(_collect_memory_debug_fields(item, f"{path}[{index}]"))
+    return fields
+
+
+def _collect_memory_uris(value) -> list[str]:
+    """Extract viking:// memory URIs from strings or structured JSON values."""
+    uris = []
+    if isinstance(value, str):
+        uris.extend(re.findall(r"<uri>\s*(viking://.*?)\s*</uri>", value, flags=re.DOTALL))
+        uris.extend(re.findall(r"viking://[^\"'<>\r\n]+", value))
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(item, str) and key.lower() in {"uri", "url", "source", "path"}:
+                if item.startswith("viking://"):
+                    uris.append(item)
+            uris.extend(_collect_memory_uris(item))
+    elif isinstance(value, list):
+        for item in value:
+            uris.extend(_collect_memory_uris(item))
+
+    cleaned = []
+    seen = set()
+    for uri in uris:
+        uri = unquote(uri.strip().rstrip(".,);]"))
+        if "/memories/" not in uri or uri in seen:
+            continue
+        seen.add(uri)
+        cleaned.append(uri)
+    return cleaned
+
+
+def extract_retrieved_memory_info(resp_json: dict) -> dict:
+    """Extract retrieved-memory debug info from the vikingbot response JSON.
+
+    The exact response shape has changed across benchmark runs, so this scans
+    likely memory/retrieval fields and records both the raw payload and derived URIs.
+    """
+    memory_payload = _collect_memory_debug_fields(resp_json)
+    memory_uris = _collect_memory_uris(memory_payload)
+    return {
+        "retrieved_memories_json": memory_payload,
+        "retrieved_memory_uris": memory_uris,
+    }
+
+
+def format_retrieved_memories_for_csv(memory_payload: dict) -> str:
+    """Format retrieved-memory payload for humans reading the CSV."""
+    if not memory_payload:
+        return ""
+
+    if set(memory_payload.keys()) == {"relevant_memories"} and isinstance(
+        memory_payload["relevant_memories"], str
+    ):
+        return memory_payload["relevant_memories"]
+
+    return json.dumps(memory_payload, ensure_ascii=False, indent=2)
+
+
+def format_memory_uris_for_csv(memory_uris: list[str]) -> str:
+    """Format retrieved memory URIs without JSON list quoting."""
+    return "\n".join(memory_uris)
+
+
+def build_eval_prompt(question: str, question_time: str | None = None) -> str:
+    if question_time:
+        return f"Current date: {question_time}. Answer the question directly: {question}"
+    return f"Answer the question directly: {question}"
+
+
+def parse_chat_output(output: str, fallback_time_cost: float) -> tuple[str, dict, float, int, list, dict]:
+    """Parse vikingbot eval JSON while preserving retrieved-memory diagnostics."""
+    try:
+        resp_json = json.loads(output, strict=False)
+        response = resp_json.get("text", "")
+        token_usage = resp_json.get(
+            "token_usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        )
+        time_cost = resp_json.get("time_cost", fallback_time_cost)
+        iteration = resp_json.get("iteration", 0)
+        tools_used_names = resp_json.get("tools_used_names", [])
+        retrieved_memory_info = extract_retrieved_memory_info(resp_json)
+    except (json.JSONDecodeError, ValueError):
+        response = f"[PARSE ERROR] {output}"
+        token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        time_cost = fallback_time_cost
+        iteration = 0
+        tools_used_names = []
+        retrieved_memory_info = extract_retrieved_memory_info({})
+    return response, token_usage, time_cost, iteration, tools_used_names, retrieved_memory_info
 
 
 def get_evidence_text(evidence_list: list, sample: dict) -> list[str]:
@@ -153,7 +277,7 @@ def load_locomo_qa(
     else:
         samples = data
 
-    for s_idx, sample in enumerate(samples):
+    for sample in samples:
         original_id = sample.get("sample_id", "")
         # Find the sample's index in the full dataset
         if sample_index is not None:
@@ -190,7 +314,7 @@ def load_locomo_qa(
                     "question_id": question_id,
                     "question_index": question_index,
                     "question": qa["question"],
-                    "answer": qa["answer"],
+                    "answer": qa.get("answer") or qa.get("adversarial_answer", ""),
                     "category": qa.get("category", ""),
                     "evidence": evidence_list,
                     "evidence_text": get_evidence_text(evidence_list, sample),
@@ -212,7 +336,7 @@ def load_locomo_qa(
                         "question_id": question_id,
                         "question_index": q_idx,
                         "question": qa["question"],
-                        "answer": qa["answer"],
+                        "answer": qa.get("answer") or qa.get("adversarial_answer", ""),
                         "category": qa.get("category", ""),
                         "evidence": evidence_list,
                         "evidence_text": get_evidence_text(evidence_list, sample),
@@ -237,10 +361,11 @@ def run_vikingbot_chat(
     question_id: str | None = None,
     config: str | None = None,
     memory_users: list[str] | None = None,
-) -> tuple[str, dict, float, int, list]:
-    """执行vikingbot chat命令，返回回答、token使用情况、耗时（秒）、迭代次数、使用的工具列表"""
-    # 先执行 /new 命令清除会话
-    if sample_id:
+) -> tuple[str, dict, float, int, list, dict]:
+    """执行vikingbot chat命令，返回回答、token使用、耗时、迭代、工具和检索记忆信息"""
+    def reset_session() -> None:
+        if not sample_id:
+            return
         new_cmd = ["vikingbot", "chat"]
         if config:
             new_cmd.extend(["--config", config])
@@ -257,18 +382,15 @@ def run_vikingbot_chat(
             for user in memory_users:
                 new_cmd.extend(["--memory-user", user])
         try:
-            # print(f'new_cmd={new_cmd}')
             subprocess.run(new_cmd, capture_output=True, text=True, timeout=300)
         except Exception:
             # 忽略 /new 命令的错误
             pass
 
-    # 如果有 question_time，注入到 prompt 中
-    if question_time:
-        input = f"Current date: {question_time}. Answer the question directly: {question}"
-    else:
-        input = f"Answer the question directly: {question}"
+    # 先执行 /new 命令清除会话
+    reset_session()
 
+    input = build_eval_prompt(question, question_time)
     cmd = ["vikingbot", "chat"]
     if config:
         cmd.extend(["--config", config])
@@ -282,28 +404,9 @@ def run_vikingbot_chat(
             cmd.extend(["--memory-user", user])
     start_time = time.time()
     try:
-        # print(f'cmd={cmd}')
         result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=600)
-        end_time = time.time()
-        time_cost = end_time - start_time
-
-        output = result.stdout.strip()
-        # 解析返回的json结果，处理换行、多余前缀等特殊情况
-        try:
-            resp_json = json.loads(output, strict=False)
-            response = resp_json.get("text", "")
-            token_usage = resp_json.get(
-                "token_usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-            )
-            time_cost = resp_json.get("time_cost", time_cost)
-            iteration = resp_json.get("iteration", 0)
-            tools_used_names = resp_json.get("tools_used_names", [])
-        except (json.JSONDecodeError, ValueError) as e:
-            response = f"[PARSE ERROR] {output}"
-            token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-            iteration = 0
-            tools_used_names = []
-        return response, token_usage, time_cost, iteration, tools_used_names
+        parsed = parse_chat_output(result.stdout.strip(), time.time() - start_time)
+        return parsed
     except subprocess.CalledProcessError as e:
         return (
             f"[CMD ERROR] {e.stderr}",
@@ -311,6 +414,7 @@ def run_vikingbot_chat(
             0,
             0,
             [],
+            extract_retrieved_memory_info({}),
         )
     except subprocess.TimeoutExpired:
         time_cost = 0
@@ -320,6 +424,7 @@ def run_vikingbot_chat(
             time_cost,
             0,
             [],
+            extract_retrieved_memory_info({}),
         )
 
 
@@ -336,11 +441,45 @@ def load_processed_questions(output_path: str, skip_done: bool = False) -> set[s
             if question:
                 processed_questions.add(question)
     return processed_questions
+
+
+def merge_fieldnames(existing_fieldnames: list[str] | None, fieldnames: list[str]) -> list[str]:
+    """Preserve existing CSV column order and append newly added columns."""
+    if not existing_fieldnames:
+        return list(fieldnames)
+    merged = list(existing_fieldnames)
+    for fieldname in fieldnames:
+        if fieldname not in merged:
+            merged.append(fieldname)
+    return merged
+
+
+def ensure_csv_fieldnames(output_path: str, fieldnames: list[str]) -> list[str]:
+    """Rewrite an existing CSV header when newly added columns are missing."""
+    if not os.path.exists(output_path):
+        return list(fieldnames)
+
+    with open(output_path, "r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        existing_fieldnames = reader.fieldnames or []
+        merged_fieldnames = merge_fieldnames(existing_fieldnames, fieldnames)
+        if merged_fieldnames == existing_fieldnames:
+            return merged_fieldnames
+        existing_rows = list(reader)
+
+    with open(output_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=merged_fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(existing_rows)
+    return merged_fieldnames
+
+
 def append_row_to_csv(output_path: str, fieldnames: list[str], row: dict) -> None:
     """追加单行结果到 CSV。"""
     file_exists = os.path.exists(output_path)
+    effective_fieldnames = ensure_csv_fieldnames(output_path, fieldnames) if file_exists else fieldnames
     with open(output_path, "a", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=effective_fieldnames, extrasaction="ignore")
         if not file_exists:
             writer.writeheader()
         writer.writerow(row)
@@ -438,8 +577,10 @@ def main():
         print(f"No errors file found at {errors_path}, is_invalid will be False for all questions")
 
     # --retry-wrong: 从结果 CSV 中提取有效错题
+    retry_wrong_keys = None
     retry_wrong_questions = None
     if args.retry_wrong:
+        retry_wrong_keys = set()
         retry_wrong_questions = set()
         retry_wrong_samples = set()
         with open(args.retry_wrong, "r", encoding="utf-8") as f:
@@ -448,9 +589,18 @@ def main():
                 if row.get("is_invalid", "").lower() == "true":
                     continue
                 if row.get("result") == "WRONG":
-                    retry_wrong_questions.add(row["question"])
-                    retry_wrong_samples.add(row["sample_id"])
-        print(f"[retry-wrong] Found {len(retry_wrong_questions)} valid wrong questions from {args.retry_wrong}")
+                    sample_id = row.get("sample_id", "")
+                    question_index = row.get("question_index", "")
+                    if sample_id and question_index != "":
+                        retry_wrong_keys.add((sample_id, str(question_index)))
+                    elif row.get("question"):
+                        retry_wrong_questions.add(row["question"])
+                    if sample_id:
+                        retry_wrong_samples.add(sample_id)
+        total_retry_wrong = len(retry_wrong_keys) + len(retry_wrong_questions)
+        print(
+            f"[retry-wrong] Found {total_retry_wrong} valid wrong questions from {args.retry_wrong}"
+        )
         if retry_wrong_samples:
             print(f"[retry-wrong] Affected samples: {', '.join(sorted(retry_wrong_samples))}")
 
@@ -465,9 +615,14 @@ def main():
     total = len(qa_list)
 
     # --retry-wrong: 只保留错题
-    if retry_wrong_questions is not None:
+    if retry_wrong_keys is not None:
         before = len(qa_list)
-        qa_list = [qa for qa in qa_list if qa["question"] in retry_wrong_questions]
+        qa_list = [
+            qa
+            for qa in qa_list
+            if (qa["sample_id"], str(qa.get("question_index", ""))) in retry_wrong_keys
+            or qa["question"] in retry_wrong_questions
+        ]
         print(f"[retry-wrong] Filtered {before} -> {len(qa_list)} questions (only wrong ones)")
 
     # 过滤掉 category=5 的问题
@@ -497,6 +652,8 @@ def main():
         "time_cost",
         "iteration",
         "tools_used_names",
+        "retrieved_memories_json",
+        "retrieved_memory_uris",
     ]
 
     # 创建线程锁，确保多线程写文件安全
@@ -505,8 +662,6 @@ def main():
     if not args.update_mode and not args.skip_done and os.path.exists(args.output):
         os.remove(args.output)
 
-    # 存储处理后的新行
-    new_rows = []
     processed_count = 0
 
     # 过滤掉已经处理过的问题
@@ -522,7 +677,6 @@ def main():
         answer = qa_item["answer"]
         question_time = qa_item.get("question_time")
         # 使用 question_id 作为 session_id，实现完全独立并行
-        sample_id = qa_item.get("sample_id")
         question_id = qa_item.get("question_id")
         speakers = qa_item.get("speakers", [])
         print(f"Processing {idx}/{total_count}: {question[:60]}...")
@@ -531,7 +685,14 @@ def main():
         if speakers:
             print(f"  [memory users: {speakers}]")
 
-        response, token_usage, time_cost, iteration, tools_used_names = run_vikingbot_chat(
+        (
+            response,
+            token_usage,
+            time_cost,
+            iteration,
+            tools_used_names,
+            retrieved_memory_info,
+        ) = run_vikingbot_chat(
             question,
             question_time,
             qa_item.get("original_sample_id"),
@@ -555,6 +716,12 @@ def main():
             "time_cost": round(time_cost, 2),
             "iteration": iteration,
             "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
+            "retrieved_memories_json": format_retrieved_memories_for_csv(
+                retrieved_memory_info.get("retrieved_memories_json", {})
+            ),
+            "retrieved_memory_uris": format_memory_uris_for_csv(
+                retrieved_memory_info.get("retrieved_memory_uris", [])
+            ),
             "is_invalid": qa_item.get("is_invalid", False),
         }
 
@@ -566,7 +733,7 @@ def main():
                     with open(args.output, "r", encoding="utf-8", newline="") as f:
                         reader = csv.DictReader(f)
                         existing_rows = list(reader)
-                        existing_fieldnames = reader.fieldnames or fieldnames
+                        existing_fieldnames = merge_fieldnames(reader.fieldnames, fieldnames)
 
                     q_idx = str(row.get("question_index", ""))
                     found = False
@@ -579,7 +746,11 @@ def main():
                         existing_rows.append(row)
 
                     with open(args.output, "w", encoding="utf-8", newline="") as f:
-                        writer = csv.DictWriter(f, fieldnames=existing_fieldnames)
+                        writer = csv.DictWriter(
+                            f,
+                            fieldnames=existing_fieldnames,
+                            extrasaction="ignore",
+                        )
                         writer.writeheader()
                         writer.writerows(existing_rows)
                 else:
@@ -587,7 +758,6 @@ def main():
             else:
                 append_row_to_csv(args.output, fieldnames, row)
 
-            new_rows.append(row)
             processed_questions.add(question)
             processed_count += 1
             print(f"Completed {processed_count}/{total_count}, time cost: {round(time_cost, 2)}s")

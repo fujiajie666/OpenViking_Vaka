@@ -48,6 +48,7 @@ class HierarchicalRetriever:
 
     MAX_CONVERGENCE_ROUNDS = 3  # Stop after multiple rounds with unchanged topk
     MAX_RELATIONS = 5  # Maximum relations per resource
+    GRAPH_AUXILIARY_RESULT_LIMIT = 3  # Graph recalls are appended, not competing.
     DIRECTORY_DOMINANCE_RATIO = 1.2  # Directory score must exceed max child score
     GLOBAL_SEARCH_TOPK = 10  # Global retrieval count (more candidates = better rerank precision)
     MAX_PARALLEL_CHILD_SEARCHES = 4  # Limit per-request fan-out against remote vector stores
@@ -59,6 +60,7 @@ class HierarchicalRetriever:
         embedder: Optional[Any],
         rerank_config: Optional[RerankConfig] = None,
         retrieval_config: Optional[RetrievalConfig] = None,
+        memory_config: Optional[Any] = None,
     ):
         """Initialize hierarchical retriever with rerank_config.
 
@@ -67,6 +69,7 @@ class HierarchicalRetriever:
             embedder: Embedder instance (supports dense/sparse/hybrid)
             rerank_config: Rerank configuration (optional, will fallback to vector search only)
             retrieval_config: Retrieval ranking configuration.
+            memory_config: Memory configuration (used for link_enabled gate).
         """
         self.vector_store = storage
         self.embedder = embedder
@@ -74,6 +77,7 @@ class HierarchicalRetriever:
         self.retrieval_config = retrieval_config or RetrievalConfig()
         self.hotness_alpha = self.retrieval_config.hotness_alpha
         self.score_propagation_alpha = self.retrieval_config.score_propagation_alpha
+        self._link_enabled = memory_config.link_enabled if memory_config else False
 
         # Use rerank threshold if available, otherwise use a default
         self.threshold = rerank_config.threshold if rerank_config else 0
@@ -212,10 +216,26 @@ class HierarchicalRetriever:
             level=level,
         )
 
+        graph_expanded = False
+
+        logger.info(f"target_dirs: {target_dirs}, level: {level}, query={query.query}")
+
+        # Step 5: Graph expansion (conditional on link_enabled and graph_alpha)
+        if self._link_enabled and self.retrieval_config.graph_alpha > 0:
+            candidates = await self._graph_expand(
+                candidates,
+                ctx,
+                limit,
+                target_dirs=target_dirs,
+                level=level,
+                query_text=query.query,
+            )
+            graph_expanded = True
+
         # Step 6: Convert results
         matched = await self._convert_to_matched_contexts(candidates, ctx=ctx)
 
-        final = matched[:limit]
+        final = self._select_final_contexts(matched, limit, graph_expanded=graph_expanded)
 
         # Record retrieval stats for the observer.
         elapsed_ms = (time.monotonic() - t0) * 1000
@@ -232,6 +252,26 @@ class HierarchicalRetriever:
             matched_contexts=final,
             searched_directories=root_uris,
         )
+
+    def _select_final_contexts(
+        self,
+        matched: List[MatchedContext],
+        limit: int,
+        *,
+        graph_expanded: bool,
+    ) -> List[MatchedContext]:
+        """Return semantic top-k plus bounded auxiliary graph recalls.
+
+        Graph memories should add evidence, not take slots away from the
+        semantic baseline.  This keeps graph_alpha>0 changes scoped to extra
+        graph-discovered contexts while preserving the normal top-k memories.
+        """
+        if not graph_expanded or limit <= 0:
+            return matched[:limit]
+
+        semantic = [context for context in matched if not context.match_reason]
+        graph = [context for context in matched if context.match_reason]
+        return semantic[:limit] + graph[: self.GRAPH_AUXILIARY_RESULT_LIMIT]
 
     async def _global_vector_search(
         self,
@@ -537,6 +577,96 @@ class HierarchicalRetriever:
         )
         return collected[:limit]
 
+    async def _graph_expand(
+        self,
+        candidates: List[Dict[str, Any]],
+        ctx: RequestContext,
+        limit: int,
+        target_dirs: Optional[List[str]] = None,
+        level: Optional[List[int]] = None,
+        query_text: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Run graph-based expansion when link_enabled and graph_alpha > 0."""
+        if not candidates:
+            logger.debug("[HierarchicalRetriever] No graph seeds, skipping graph expansion")
+            return candidates
+
+        space_uris = self._get_graph_space_uris(
+            ctx=ctx,
+            target_dirs=target_dirs,
+            candidates=candidates,
+        )
+        logger.info(f"[HierarchicalRetriever] Graph expand: space_uris={space_uris}")
+        if not space_uris:
+            logger.debug(
+                "[HierarchicalRetriever] No graph memory spaces, skipping graph expansion"
+            )
+            return candidates
+
+        from openviking.retrieve.graph.graph_index import get_graph_index
+        from openviking.retrieve.graph.graph_retriever import GraphRetriever
+
+        index = get_graph_index(space_uris)
+        if not index.is_fresh(space_uris):
+            await index.build(space_uris, ctx)
+
+        if not index.get_nodes():
+            logger.debug("[HierarchicalRetriever] Graph index empty, skipping graph expansion")
+            return candidates
+
+        graph_retriever = GraphRetriever(index, self.retrieval_config)
+        return await graph_retriever.expand(
+            candidates,
+            ctx,
+            limit,
+            target_dirs=target_dirs,
+            level=level,
+            query_text=query_text,
+        )
+
+    def _get_graph_space_uris(
+        self,
+        ctx: RequestContext,
+        target_dirs: Optional[List[str]],
+        candidates: List[Dict[str, Any]],
+    ) -> List[str]:
+        """Determine memory spaces that graph retrieval should scan.
+
+        ROOT requests cannot infer visible user/agent memory roots from ctx
+        alone.  In that case, prefer the target directories already used by
+        vector retrieval, then fall back to memory candidate URIs.
+        """
+        space_uris: List[str] = []
+
+        for uri in target_dirs or []:
+            space_uri = self._memory_space_uri_from_uri(uri)
+            if space_uri:
+                space_uris.append(space_uri)
+
+        if not space_uris:
+            space_uris = self._get_root_uris_for_type(ContextType.MEMORY, ctx=ctx)
+
+        if not space_uris:
+            for candidate in candidates:
+                space_uri = self._memory_space_uri_from_uri(candidate.get("uri", ""))
+                if space_uri:
+                    space_uris.append(space_uri)
+
+        return list(dict.fromkeys(space_uris))
+
+    @staticmethod
+    def _memory_space_uri_from_uri(uri: str) -> Optional[str]:
+        """Return the owning memory-space root for a user/agent memory URI."""
+        if not uri or not (
+            uri.startswith("viking://user/") or uri.startswith("viking://agent/")
+        ):
+            return None
+        marker = "/memories"
+        idx = uri.find(marker)
+        if idx < 0:
+            return None
+        return uri[: idx + len(marker)]
+
     async def _convert_to_matched_contexts(
         self,
         candidates: List[Dict[str, Any]],
@@ -594,6 +724,17 @@ class HierarchicalRetriever:
             level = c.get("level", 2)
             display_uri = self._append_level_suffix(c.get("uri", ""), level)
 
+            # Build match_reason for graph-expanded nodes
+            match_reason = ""
+            if c.get("_from_graph"):
+                match_reason = "Discovered via graph expansion"
+                if c.get("_graph_paths"):
+                    path_descs = []
+                    for gp in c["_graph_paths"][:2]:
+                        link_types = ", ".join(gp.get("link_types", []))
+                        path_descs.append(f"Path: {gp['path']} ({link_types})")
+                    match_reason = "; ".join(path_descs)
+
             results.append(
                 MatchedContext(
                     uri=display_uri,
@@ -604,6 +745,7 @@ class HierarchicalRetriever:
                     abstract=c.get("abstract", ""),
                     category=c.get("category", ""),
                     score=final_score,
+                    match_reason=match_reason,
                     relations=relations,
                 )
             )
