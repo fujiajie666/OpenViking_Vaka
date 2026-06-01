@@ -31,11 +31,13 @@ _GRAPH_SCORING_POOL_FACTOR = 4
 _MIN_GRAPH_SUPPORT = 1e-12
 _MIN_QUERY_EVIDENCE = 0.16
 _MIN_OWN_QUERY_EVIDENCE = 0.08
+_MIN_STRONG_OWN_QUERY_EVIDENCE = 0.45
+_HIGH_RISK_GRAPH_DEGREE = 24
 _EDGE_EVIDENCE_WEIGHT = 0.35
 _URI_EVIDENCE_WEIGHT = 0.20
 _CATEGORY_EVIDENCE_WEIGHT = 0.10
 _GRAPH_SCORE_CEILING_FRACTION = 0.25
-_GRAPH_RETRIEVER_STRATEGY = "evidence_gated_append_v2"
+_GRAPH_RETRIEVER_STRATEGY = "evidence_gated_append_v5"
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _CURRENT_DATE_PREFIX_RE = re.compile(
@@ -401,10 +403,11 @@ class GraphRetriever:
                 + 0.3 * norm_ppr.get(uri, 0.0)
             ) * candidate.get("_graph_specificity", 1.0)
             evidence = evidence_signals.combined
+            own_threshold = self._own_evidence_threshold(candidate)
             accepted = (
                 support > _MIN_GRAPH_SUPPORT
                 and path_signal > 0
-                and evidence_signals.own >= _MIN_OWN_QUERY_EVIDENCE
+                and evidence_signals.own >= own_threshold
                 and evidence >= _MIN_QUERY_EVIDENCE
             )
             graph_boost = (
@@ -415,6 +418,10 @@ class GraphRetriever:
             graph_score = min(score_ceiling, semantic_floor + graph_boost)
 
             candidate["_graph_path_signal"] = path_signal
+            candidate["_graph_requires_strong_own_evidence"] = (
+                own_threshold > _MIN_OWN_QUERY_EVIDENCE
+            )
+            candidate["_graph_own_evidence_threshold"] = own_threshold
             candidate["_graph_accepted"] = accepted
             candidate["_graph_boost"] = graph_score - semantic_floor if accepted else 0.0
             candidate["_final_score"] = graph_score if accepted else semantic_floor
@@ -626,6 +633,27 @@ class GraphRetriever:
         if not isinstance(score, (int, float)) or not math.isfinite(score):
             return 0.0
         return float(score)
+
+    def _own_evidence_threshold(self, candidate: Dict[str, Any]) -> float:
+        if self._requires_strong_own_evidence(candidate):
+            return _MIN_STRONG_OWN_QUERY_EVIDENCE
+        return _MIN_OWN_QUERY_EVIDENCE
+
+    def _requires_strong_own_evidence(self, candidate: Dict[str, Any]) -> bool:
+        uri = str(candidate.get("uri", "") or "").lower()
+        memory_type = str(candidate.get("memory_type", "") or "").lower()
+        category = str(candidate.get("category", "") or "").lower()
+        degree = candidate.get("_graph_degree")
+        if not isinstance(degree, (int, float)) or not math.isfinite(degree):
+            degree = self._node_degree(uri)
+
+        profile_like = (
+            "/entities/person/" in uri
+            or uri.endswith("/profile.md")
+            or memory_type in {"profile", "person"}
+            or category in {"person", "profile"}
+        )
+        return profile_like or degree >= _HIGH_RISK_GRAPH_DEGREE
 
     @staticmethod
     def _normalize_target_dirs(target_dirs: List[str] | None) -> List[str]:

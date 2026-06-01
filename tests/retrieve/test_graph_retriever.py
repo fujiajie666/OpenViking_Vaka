@@ -310,6 +310,90 @@ def test_query_aligned_graph_candidate_can_enter_below_semantic_ceiling():
     ]
 
 
+def test_profile_like_graph_candidate_requires_stronger_own_evidence():
+    retriever = GraphRetriever(_build_test_index(), RetrievalConfig(graph_alpha=0.4))
+    weak_profile = "viking://user/u/memories/entities/person/melanie.md"
+    strong_profile = "viking://user/u/memories/entities/person/melanie_books.md"
+    candidates = [
+        {"uri": "viking://top", "_final_score": 0.9, "_score": 0.9},
+        {"uri": "viking://weak", "_final_score": 0.6, "_score": 0.6},
+        {
+            "uri": weak_profile,
+            "_final_score": 0.0,
+            "_score": 0.0,
+            "_from_graph": True,
+            "_ppr_score": 1.0,
+            "_graph_support": 1.0,
+            "_norm_graph_support": 1.0,
+            "_graph_specificity": 1.0,
+            "_graph_degree": 1,
+            "memory_type": "person",
+            "abstract": "Melanie keeps a general profile.",
+        },
+        {
+            "uri": strong_profile,
+            "_final_score": 0.0,
+            "_score": 0.0,
+            "_from_graph": True,
+            "_ppr_score": 1.0,
+            "_graph_support": 1.0,
+            "_norm_graph_support": 1.0,
+            "_graph_specificity": 1.0,
+            "_graph_degree": 1,
+            "memory_type": "person",
+            "abstract": "Melanie read books including Dune.",
+        },
+    ]
+
+    result = retriever._score_graph_candidates(
+        candidates,
+        query_text="What books has Melanie read?",
+        limit=2,
+    )
+    by_uri = {candidate["uri"]: candidate for candidate in result}
+
+    assert by_uri[weak_profile]["_graph_requires_strong_own_evidence"] is True
+    assert (
+        by_uri[weak_profile]["_graph_evidence_own"]
+        < by_uri[weak_profile]["_graph_own_evidence_threshold"]
+    )
+    assert by_uri[weak_profile]["_graph_accepted"] is False
+    assert by_uri[strong_profile]["_graph_requires_strong_own_evidence"] is True
+    assert by_uri[strong_profile]["_graph_accepted"] is True
+
+
+def test_high_degree_graph_candidate_requires_stronger_own_evidence():
+    retriever = GraphRetriever(_build_test_index(), RetrievalConfig(graph_alpha=0.4))
+    hub_uri = "viking://user/u/memories/entities/topic/reading.md"
+    candidates = [
+        {"uri": "viking://top", "_final_score": 0.9, "_score": 0.9},
+        {"uri": "viking://weak", "_final_score": 0.6, "_score": 0.6},
+        {
+            "uri": hub_uri,
+            "_final_score": 0.0,
+            "_score": 0.0,
+            "_from_graph": True,
+            "_ppr_score": 1.0,
+            "_graph_support": 1.0,
+            "_norm_graph_support": 1.0,
+            "_graph_specificity": retriever._degree_specificity(80),
+            "_graph_degree": 80,
+            "memory_type": "entity",
+            "abstract": "Melanie keeps a general note.",
+        },
+    ]
+
+    result = retriever._score_graph_candidates(
+        candidates,
+        query_text="What books has Melanie read?",
+        limit=2,
+    )
+    by_uri = {candidate["uri"]: candidate for candidate in result}
+
+    assert by_uri[hub_uri]["_graph_requires_strong_own_evidence"] is True
+    assert by_uri[hub_uri]["_graph_accepted"] is False
+
+
 def test_degree_penalty_prefers_specific_node_over_hub():
     index = _build_test_index()
     specific = "viking://specific_event"
