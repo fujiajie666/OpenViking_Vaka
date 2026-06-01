@@ -310,6 +310,66 @@ def test_query_aligned_graph_candidate_can_enter_below_semantic_ceiling():
     ]
 
 
+def test_select_graph_snippet_prefers_query_relevant_sentence():
+    retriever = GraphRetriever(_build_test_index(), RetrievalConfig(graph_alpha=0.4))
+    prefix = " ".join(
+        "Background note about classes and weekend planning."
+        for _ in range(12)
+    )
+    content = (
+        f"{prefix} "
+        "On October 14, Sam made plans to try kayaking with friends. "
+        "They discussed possible weekend locations and equipment."
+    )
+
+    snippet = retriever._select_graph_snippet(
+        content=content,
+        query_text=(
+            "Current date: 2023-10-22. "
+            "Answer the question directly: What plans did Sam make in October?"
+        ),
+    )
+
+    assert "kayaking" in snippet
+    assert snippet != retriever._trim_graph_snippet(content, max_chars=360)
+    assert snippet.startswith("On October 14")
+    assert len(snippet) <= 360
+
+
+def test_select_graph_snippet_keeps_prefix_for_single_token_chat_overlap():
+    retriever = GraphRetriever(_build_test_index(), RetrievalConfig(graph_alpha=0.4))
+    content = (
+        "The store update covered shelving, packaging, and display plans. "
+        "Thanks, Gina. Gina: Yeah Jon! "
+        "The team also discussed shipping dates and inventory cleanup."
+    )
+
+    snippet = retriever._select_graph_snippet(
+        content=content,
+        query_text="What did Gina make a limited edition line of?",
+    )
+
+    assert snippet == retriever._trim_graph_snippet(content, max_chars=360)
+
+
+def test_graph_full_abstract_is_used_for_own_evidence():
+    retriever = GraphRetriever(_build_test_index(), RetrievalConfig(graph_alpha=0.4))
+    candidates = [
+        {
+            "uri": "viking://node2",
+            "abstract": "Andrew.",
+            "_graph_full_abstract": "Andrew described the autumn colors as beautiful.",
+        }
+    ]
+
+    signals = retriever._compute_query_evidence_signals(
+        candidates,
+        "What aspect of autumn did Andrew find beautiful?",
+    )
+
+    assert signals["viking://node2"].own > 0.4
+
+
 def test_profile_like_graph_candidate_requires_stronger_own_evidence():
     retriever = GraphRetriever(_build_test_index(), RetrievalConfig(graph_alpha=0.4))
     weak_profile = "viking://user/u/memories/entities/person/melanie.md"
