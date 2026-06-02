@@ -302,6 +302,9 @@ def test_query_aligned_graph_candidate_can_enter_below_semantic_ceiling():
     by_uri = {candidate["uri"]: candidate for candidate in result}
 
     assert by_uri["viking://node2"]["_graph_accepted"] is True
+    assert by_uri["viking://node2"]["_graph_debug"]["accepted_reason"] == "accepted"
+    assert by_uri["viking://node2"]["_graph_debug"]["uri_kind"] == "event"
+    assert by_uri["viking://node2"]["_graph_debug"]["snippet_score"]["overlap"] > 0
     assert by_uri["viking://node2"]["_final_score"] > by_uri["viking://weak"][
         "_final_score"
     ]
@@ -452,6 +455,10 @@ def test_high_degree_graph_candidate_requires_stronger_own_evidence():
 
     assert by_uri[hub_uri]["_graph_requires_strong_own_evidence"] is True
     assert by_uri[hub_uri]["_graph_accepted"] is False
+    assert (
+        by_uri[hub_uri]["_graph_debug"]["accepted_reason"]
+        == "rejected:own_evidence_below_threshold"
+    )
 
 
 def test_degree_penalty_prefers_specific_node_over_hub():

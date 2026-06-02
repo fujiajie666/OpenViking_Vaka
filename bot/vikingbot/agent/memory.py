@@ -19,6 +19,7 @@ class MemoryStore:
         self.memory_dir = ensure_dir(workspace / "memory")
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.history_file = self.memory_dir / "HISTORY.md"
+        self.latest_graph_retrieval_debug: list[dict[str, Any]] | None = None
 
     def read_long_term(self) -> str:
         if self.memory_file.exists():
@@ -176,6 +177,7 @@ class MemoryStore:
         user_ids: list[str] | None = None,
     ) -> str:
         client = None
+        self.latest_graph_retrieval_debug = None
         try:
             config = load_config().ov_server
             admin_user_id = config.admin_user_id
@@ -194,6 +196,8 @@ class MemoryStore:
             )
             if not result:
                 return ""
+            graph_debug = result.get("graph_retrieval_debug") if isinstance(result, dict) else None
+            self.latest_graph_retrieval_debug = graph_debug or None
 
             # Log raw search results for debugging
             memory_list = []

@@ -693,6 +693,7 @@ class AgentLoop:
                 memory_users=memory_user,
             )
             relevant_memories = message_context.latest_relevant_memories
+            graph_retrieval_debug = message_context.latest_graph_retrieval_debug
             # logger.info(f"New messages: {json.dumps(messages, indent=4)}")
 
             # Run agent loop within a stable response identity for tracing/tool spans.
@@ -749,6 +750,8 @@ class AgentLoop:
             response_metadata = dict(msg.metadata or {})
             if relevant_memories is not None:
                 response_metadata["relevant_memories"] = relevant_memories
+            if graph_retrieval_debug is not None:
+                response_metadata["graph_retrieval_debug"] = graph_retrieval_debug
             await self.bus.publish_outbound(
                 OutboundMessage(
                     session_key=msg.session_key,

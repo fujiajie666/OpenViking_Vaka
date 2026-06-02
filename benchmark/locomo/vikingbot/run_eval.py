@@ -17,6 +17,7 @@ MEMORY_FIELD_HINTS = (
     "memories",
     "retriev",
 )
+GRAPH_RETRIEVAL_DEBUG_KEY = "graph_retrieval_debug"
 
 
 def _contains_memory_signal(value) -> bool:
@@ -35,6 +36,8 @@ def _collect_memory_debug_fields(value, path: str = "") -> dict:
     fields = {}
     if isinstance(value, dict):
         for key, item in value.items():
+            if key == GRAPH_RETRIEVAL_DEBUG_KEY:
+                continue
             key_path = f"{path}.{key}" if path else key
             key_lower = key.lower()
             if any(hint in key_lower for hint in MEMORY_FIELD_HINTS) and _contains_memory_signal(
@@ -86,6 +89,7 @@ def extract_retrieved_memory_info(resp_json: dict) -> dict:
     return {
         "retrieved_memories_json": memory_payload,
         "retrieved_memory_uris": memory_uris,
+        "graph_retrieval_debug": resp_json.get(GRAPH_RETRIEVAL_DEBUG_KEY),
     }
 
 
@@ -105,6 +109,13 @@ def format_retrieved_memories_for_csv(memory_payload: dict) -> str:
 def format_memory_uris_for_csv(memory_uris: list[str]) -> str:
     """Format retrieved memory URIs without JSON list quoting."""
     return "\n".join(memory_uris)
+
+
+def format_graph_retrieval_debug_for_csv(graph_debug) -> str:
+    """Format graph retrieval metadata for CSV debug analysis."""
+    if not graph_debug:
+        return ""
+    return json.dumps(graph_debug, ensure_ascii=False, indent=2)
 
 
 def build_eval_prompt(question: str, question_time: str | None = None) -> str:
@@ -654,6 +665,7 @@ def main():
         "tools_used_names",
         "retrieved_memories_json",
         "retrieved_memory_uris",
+        "graph_retrieval_debug_json",
     ]
 
     # 创建线程锁，确保多线程写文件安全
@@ -721,6 +733,9 @@ def main():
             ),
             "retrieved_memory_uris": format_memory_uris_for_csv(
                 retrieved_memory_info.get("retrieved_memory_uris", [])
+            ),
+            "graph_retrieval_debug_json": format_graph_retrieval_debug_for_csv(
+                retrieved_memory_info.get("graph_retrieval_debug")
             ),
             "is_invalid": qa_item.get("is_invalid", False),
         }

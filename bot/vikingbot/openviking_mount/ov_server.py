@@ -81,7 +81,7 @@ class VikingClient:
 
     def _matched_context_to_dict(self, matched_context: Any) -> Dict[str, Any]:
         """将 MatchedContext 对象转换为字典"""
-        return {
+        result = {
             "uri": getattr(matched_context, "uri", ""),
             "context_type": str(getattr(matched_context, "context_type", "")),
             "is_leaf": getattr(matched_context, "is_leaf", False),
@@ -94,6 +94,10 @@ class VikingClient:
                 self._relation_to_dict(r) for r in getattr(matched_context, "relations", [])
             ],
         }
+        debug_metadata = getattr(matched_context, "debug_metadata", None)
+        if debug_metadata:
+            result["debug_metadata"] = debug_metadata
+        return result
 
     def _relation_to_dict(self, relation: Any) -> Dict[str, Any]:
         """将 Relation 对象转换为字典"""
@@ -405,10 +409,21 @@ class VikingClient:
             memories = getattr(result, "memories", None)
             return memories if isinstance(memories, list) else []
 
+        def _extract_graph_debug(result: Any) -> dict[str, Any]:
+            if not result:
+                return {}
+            if isinstance(result, dict):
+                debug_metadata = result.get("debug_metadata") or {}
+            else:
+                debug_metadata = getattr(result, "debug_metadata", {}) or {}
+            graph_debug = debug_metadata.get("graph_retrieval")
+            return graph_debug if isinstance(graph_debug, dict) else {}
+
         if isinstance(user_ids, str):
             user_ids = [user_ids]
 
         all_user_memories = []
+        graph_retrieval_debug = []
 
         for user_id in user_ids:
             effective_user_id = self._effective_user_id(user_id)
@@ -424,6 +439,15 @@ class VikingClient:
                 limit=limit,
             )
             all_user_memories.extend(_extract_memories(user_memory))
+            user_graph_debug = _extract_graph_debug(user_memory)
+            if user_graph_debug:
+                graph_retrieval_debug.append(
+                    {
+                        "scope": "user_memory",
+                        "user_id": effective_user_id,
+                        **user_graph_debug,
+                    }
+                )
 
         uri_agent_memory = self._agent_memory_target_uri(agent_user_id)
         agent_memory_result = await self.client.find(
@@ -432,8 +456,21 @@ class VikingClient:
             limit=limit,
         )
         all_agent_memories = _extract_memories(agent_memory_result)
+        agent_graph_debug = _extract_graph_debug(agent_memory_result)
+        if agent_graph_debug:
+            graph_retrieval_debug.append(
+                {
+                    "scope": "agent_memory",
+                    "agent_user_id": agent_user_id,
+                    **agent_graph_debug,
+                }
+            )
 
-        return {"user_memory": all_user_memories, "agent_memory": all_agent_memories}
+        return {
+            "user_memory": all_user_memories,
+            "agent_memory": all_agent_memories,
+            "graph_retrieval_debug": graph_retrieval_debug,
+        }
 
     async def search_experiences(self, query: str, limit: int = 5) -> list[Any]:
         """用 query 检索 agent experience 记忆。"""

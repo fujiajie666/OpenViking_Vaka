@@ -217,6 +217,7 @@ class HierarchicalRetriever:
         )
 
         graph_expanded = False
+        graph_retrieval_debug: Dict[str, Any] = {}
 
         logger.info(f"target_dirs: {target_dirs}, level: {level}, query={query.query}")
 
@@ -229,6 +230,7 @@ class HierarchicalRetriever:
                 target_dirs=target_dirs,
                 level=level,
                 query_text=query.query,
+                debug_out=graph_retrieval_debug,
             )
             graph_expanded = True
 
@@ -251,6 +253,9 @@ class HierarchicalRetriever:
             query=query,
             matched_contexts=final,
             searched_directories=root_uris,
+            debug_metadata={"graph_retrieval": graph_retrieval_debug}
+            if graph_retrieval_debug
+            else {},
         )
 
     def _select_final_contexts(
@@ -585,6 +590,7 @@ class HierarchicalRetriever:
         target_dirs: Optional[List[str]] = None,
         level: Optional[List[int]] = None,
         query_text: Optional[str] = None,
+        debug_out: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Run graph-based expansion when link_enabled and graph_alpha > 0."""
         if not candidates:
@@ -615,7 +621,7 @@ class HierarchicalRetriever:
             return candidates
 
         graph_retriever = GraphRetriever(index, self.retrieval_config)
-        return await graph_retriever.expand(
+        expanded = await graph_retriever.expand(
             candidates,
             ctx,
             limit,
@@ -623,6 +629,9 @@ class HierarchicalRetriever:
             level=level,
             query_text=query_text,
         )
+        if debug_out is not None:
+            debug_out.update(graph_retriever.debug_metadata)
+        return expanded
 
     def _get_graph_space_uris(
         self,
@@ -746,6 +755,7 @@ class HierarchicalRetriever:
                     category=c.get("category", ""),
                     score=final_score,
                     match_reason=match_reason,
+                    debug_metadata=c.get("_graph_debug", {}) if c.get("_from_graph") else {},
                     relations=relations,
                 )
             )

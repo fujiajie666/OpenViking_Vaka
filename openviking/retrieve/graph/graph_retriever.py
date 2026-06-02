@@ -134,6 +134,11 @@ class GraphRetriever:
     def __init__(self, graph_index: GraphIndex, retrieval_config: RetrievalConfig):
         self._graph_index = graph_index
         self._config = retrieval_config
+        self._debug_metadata: Dict[str, Any] = {}
+
+    @property
+    def debug_metadata(self) -> Dict[str, Any]:
+        return self._debug_metadata
 
     async def expand(
         self,
@@ -145,8 +150,10 @@ class GraphRetriever:
         query_text: str | None = None,
     ) -> List[Dict[str, Any]]:
         """Append graph-discovered memories that pass generic evidence gates."""
+        self._debug_metadata = {}
         seeds = self._build_seeds(candidates)
         if not seeds:
+            self._debug_metadata = self._build_retrieval_debug([], returned_uris=set())
             return candidates
 
         ppr_engine = TypedWeightedPPR(
@@ -186,7 +193,8 @@ class GraphRetriever:
             query_text=query_text,
             limit=limit,
         )
-        expanded = self._filter_unaccepted_graph_nodes(expanded)
+        scored_candidates = expanded
+        expanded = self._filter_unaccepted_graph_nodes(scored_candidates)
 
         if self._config.graph_path_count > 0:
             try:
@@ -201,7 +209,12 @@ class GraphRetriever:
                     f"graph paths: {exc}"
                 )
 
-        return self._select_expanded_candidates(expanded, limit=limit)
+        selected = self._select_expanded_candidates(expanded, limit=limit)
+        self._debug_metadata = self._build_retrieval_debug(
+            scored_candidates,
+            returned_uris={candidate.get("uri", "") for candidate in selected},
+        )
+        return selected
 
     def _build_seeds(self, candidates: List[Dict[str, Any]]) -> Dict[str, float]:
         """Build normalized graph seeds from the strongest semantic candidates."""
@@ -432,6 +445,19 @@ class GraphRetriever:
             candidate["_graph_accepted"] = accepted
             candidate["_graph_boost"] = graph_score - semantic_floor if accepted else 0.0
             candidate["_final_score"] = graph_score if accepted else semantic_floor
+            candidate["_graph_accept_reason"] = self._graph_accept_reason(
+                support=support,
+                path_signal=path_signal,
+                own_evidence=evidence_signals.own,
+                own_threshold=own_threshold,
+                total_evidence=evidence,
+                accepted=accepted,
+            )
+            candidate["_graph_snippet_score"] = self._graph_snippet_debug_score(
+                candidate,
+                query_text,
+            )
+            candidate["_graph_debug"] = self._candidate_graph_debug(candidate)
             if accepted:
                 accepted_count += 1
 
@@ -502,6 +528,116 @@ class GraphRetriever:
         candidate["_graph_specificity"] = self._degree_specificity(degree)
         candidate["_graph_support"] = support_scores.get(uri, 0.0)
         candidate["_norm_graph_support"] = norm_support.get(uri, 0.0)
+
+    def _build_retrieval_debug(
+        self,
+        candidates: List[Dict[str, Any]],
+        *,
+        returned_uris: set[str],
+    ) -> Dict[str, Any]:
+        records: List[Dict[str, Any]] = []
+        for candidate in candidates:
+            if not candidate.get("_from_graph"):
+                continue
+            record = dict(candidate.get("_graph_debug") or self._candidate_graph_debug(candidate))
+            record["returned"] = record.get("uri") in returned_uris
+            records.append(record)
+
+        return {
+            "strategy": _GRAPH_RETRIEVER_STRATEGY,
+            "candidate_count": len(records),
+            "accepted_count": sum(1 for record in records if record.get("accepted")),
+            "returned_count": sum(1 for record in records if record.get("returned")),
+            "candidates": records,
+        }
+
+    def _candidate_graph_debug(self, candidate: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "uri": candidate.get("uri", ""),
+            "support": self._finite_float(candidate.get("_graph_support", 0.0)),
+            "path_signal": self._finite_float(candidate.get("_graph_path_signal", 0.0)),
+            "own_evidence": self._finite_float(candidate.get("_graph_evidence_own", 0.0)),
+            "total_evidence": self._finite_float(candidate.get("_graph_query_evidence", 0.0)),
+            "own_threshold": self._finite_float(
+                candidate.get("_graph_own_evidence_threshold", 0.0)
+            ),
+            "degree": int(candidate.get("_graph_degree", 0) or 0),
+            "memory_type": str(candidate.get("memory_type", "") or ""),
+            "uri_kind": self._uri_kind(candidate),
+            "snippet_score": candidate.get("_graph_snippet_score", {"overlap": 0, "density": 0.0}),
+            "accepted": bool(candidate.get("_graph_accepted", False)),
+            "accepted_reason": str(candidate.get("_graph_accept_reason", "not_scored")),
+            "final_score": self._finite_float(candidate.get("_final_score", 0.0)),
+            "graph_boost": self._finite_float(candidate.get("_graph_boost", 0.0)),
+        }
+
+    def _graph_accept_reason(
+        self,
+        *,
+        support: float,
+        path_signal: float,
+        own_evidence: float,
+        own_threshold: float,
+        total_evidence: float,
+        accepted: bool,
+    ) -> str:
+        if accepted:
+            return "accepted"
+        if support <= _MIN_GRAPH_SUPPORT:
+            return "rejected:no_direct_support"
+        if path_signal <= 0:
+            return "rejected:no_path_signal"
+        if own_evidence < own_threshold:
+            return "rejected:own_evidence_below_threshold"
+        if total_evidence < _MIN_QUERY_EVIDENCE:
+            return "rejected:total_evidence_below_threshold"
+        return "rejected:unknown"
+
+    def _graph_snippet_debug_score(
+        self,
+        candidate: Dict[str, Any],
+        query_text: str | None,
+    ) -> Dict[str, Any]:
+        query_tokens = self._tokenize(self._normalize_graph_query(query_text))
+        if not query_tokens:
+            return {"overlap": 0, "density": 0.0}
+        overlap, density = self._snippet_query_score(
+            str(candidate.get("abstract", "") or ""),
+            query_tokens,
+        )
+        return {"overlap": overlap, "density": self._finite_float(density)}
+
+    def _uri_kind(self, candidate: Dict[str, Any]) -> str:
+        uri = str(candidate.get("uri", "") or "").lower()
+        memory_type = str(candidate.get("memory_type", "") or "").lower()
+        category = str(candidate.get("category", "") or "").lower()
+        if (not memory_type or not category) and self._graph_index.has_node(
+            str(candidate.get("uri", "") or "")
+        ):
+            node = self._graph_index.get_node(str(candidate.get("uri", "") or ""))
+            if node:
+                memory_type = memory_type or str(node.memory_type or "").lower()
+                category = category or str(node.category or "").lower()
+        if "/events/" in uri or "/entities/event/" in uri or memory_type in {"event", "events"}:
+            return "event"
+        if (
+            "/entities/person/" in uri
+            or uri.endswith("/profile.md")
+            or memory_type in {"person", "profile"}
+            or category in {"person", "profile"}
+        ):
+            return "person/profile"
+        if "/preferences/" in uri or memory_type in {"preference", "preferences"}:
+            return "preference"
+        if "/entities/" in uri or memory_type in {"entity", "entities"}:
+            return "entity"
+        return "other"
+
+    @staticmethod
+    def _finite_float(value: Any) -> float:
+        if not isinstance(value, (int, float)) or not math.isfinite(value):
+            return 0.0
+        return round(float(value), 6)
 
     def _compute_query_evidence_signals(
         self,
