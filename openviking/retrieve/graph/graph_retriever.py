@@ -37,12 +37,9 @@ _EDGE_EVIDENCE_WEIGHT = 0.35
 _URI_EVIDENCE_WEIGHT = 0.20
 _CATEGORY_EVIDENCE_WEIGHT = 0.10
 _GRAPH_SCORE_CEILING_FRACTION = 0.25
-_GRAPH_SNIPPET_MAX_CHARS = 360
-_GRAPH_SNIPPET_DENSITY_MARGIN = 0.12
 _GRAPH_RETRIEVER_STRATEGY = "evidence_gated_append_v5"
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 _CURRENT_DATE_PREFIX_RE = re.compile(
     r"^\s*current\s+date\s*:\s*\d{4}-\d{2}-\d{2}\s*\.\s*",
     re.IGNORECASE,
@@ -183,11 +180,7 @@ class GraphRetriever:
             target_dirs=target_dirs,
             level=level,
         )
-        expanded = await self._fill_abstracts_for_graph_nodes(
-            expanded,
-            ctx,
-            query_text=query_text,
-        )
+        expanded = await self._fill_abstracts_for_graph_nodes(expanded, ctx)
         expanded = self._score_graph_candidates(
             expanded,
             query_text=query_text,
@@ -607,6 +600,16 @@ class GraphRetriever:
         )
         return {"overlap": overlap, "density": self._finite_float(density)}
 
+    def _snippet_query_score(
+        self,
+        snippet: str,
+        query_tokens: set[str],
+    ) -> tuple[int, float]:
+        snippet_tokens = self._tokenize(snippet)
+        overlap = len(query_tokens & snippet_tokens)
+        density = overlap / max(len(snippet_tokens), 1)
+        return overlap, density
+
     def _uri_kind(self, candidate: Dict[str, Any]) -> str:
         uri = str(candidate.get("uri", "") or "").lower()
         memory_type = str(candidate.get("memory_type", "") or "").lower()
@@ -722,9 +725,8 @@ class GraphRetriever:
 
     def _candidate_signal_tokens(self, candidate: Dict[str, Any]) -> Dict[str, set[str]]:
         uri = candidate.get("uri", "")
-        own_text = candidate.get("_graph_full_abstract") or candidate.get("abstract", "")
         return {
-            "own": self._tokenize(own_text),
+            "own": self._tokenize(candidate.get("abstract", "")),
             "edge": self._tokenize(self._edge_evidence_text(uri)),
             "uri": self._tokenize(uri),
             "category": self._tokenize(
@@ -759,136 +761,6 @@ class GraphRetriever:
         text = _CURRENT_DATE_PREFIX_RE.sub("", text)
         text = _ANSWER_DIRECTLY_PREFIX_RE.sub("", text)
         return text.strip()
-
-    def _select_graph_snippet(
-        self,
-        *,
-        content: str,
-        query_text: str | None,
-        max_chars: int = _GRAPH_SNIPPET_MAX_CHARS,
-    ) -> str:
-        """Select a query-relevant excerpt only when it beats the old prefix snippet."""
-        prefix_snippet = self._trim_graph_snippet(content, max_chars=max_chars)
-        if len(" ".join(str(content or "").split())) <= max_chars:
-            return prefix_snippet
-
-        query_tokens = self._tokenize(self._normalize_graph_query(query_text))
-        if not query_tokens:
-            return prefix_snippet
-
-        sentences = self._split_sentences(content)
-        if not sentences:
-            return prefix_snippet
-
-        min_overlap = min(2, len(query_tokens))
-        scored: List[tuple[tuple[int, float, int], int]] = []
-        for index, sentence in enumerate(sentences):
-            sentence_tokens = self._tokenize(sentence)
-            if not sentence_tokens:
-                continue
-            overlap = len(query_tokens & sentence_tokens)
-            if overlap < min_overlap:
-                continue
-            density = overlap / max(len(sentence_tokens), 1)
-            scored.append(((overlap, density, -len(sentence)), index))
-
-        if not scored:
-            return prefix_snippet
-
-        _, best_index = max(scored, key=lambda item: item[0])
-        query_snippet = self._build_graph_snippet_window(
-            sentences,
-            best_index,
-            max_chars=max_chars,
-        )
-        prefix_score = self._snippet_query_score(prefix_snippet, query_tokens)
-        query_score = self._snippet_query_score(query_snippet, query_tokens)
-        if not self._query_snippet_is_better(query_score, prefix_score):
-            return prefix_snippet
-        return self._fill_graph_snippet_budget(
-            query_snippet,
-            prefix_snippet,
-            max_chars=max_chars,
-        )
-
-    def _snippet_query_score(
-        self,
-        snippet: str,
-        query_tokens: set[str],
-    ) -> tuple[int, float]:
-        snippet_tokens = self._tokenize(snippet)
-        overlap = len(query_tokens & snippet_tokens)
-        density = overlap / max(len(snippet_tokens), 1)
-        return overlap, density
-
-    @staticmethod
-    def _query_snippet_is_better(
-        query_score: tuple[int, float],
-        prefix_score: tuple[int, float],
-    ) -> bool:
-        query_overlap, query_density = query_score
-        prefix_overlap, prefix_density = prefix_score
-        if query_overlap >= prefix_overlap + 1:
-            return True
-        return (
-            query_overlap == prefix_overlap
-            and query_overlap >= 3
-            and query_density >= prefix_density + _GRAPH_SNIPPET_DENSITY_MARGIN
-        )
-
-    def _build_graph_snippet_window(
-        self,
-        sentences: List[str],
-        center_index: int,
-        *,
-        max_chars: int,
-    ) -> str:
-        parts = [sentences[center_index]]
-        if center_index + 1 < len(sentences):
-            parts.append(sentences[center_index + 1])
-        return self._trim_graph_snippet(" ".join(parts), max_chars=max_chars)
-
-    def _fill_graph_snippet_budget(
-        self,
-        query_snippet: str,
-        prefix_snippet: str,
-        *,
-        max_chars: int,
-    ) -> str:
-        if not prefix_snippet or prefix_snippet == query_snippet:
-            return query_snippet
-        if len(query_snippet) >= int(max_chars * 0.8):
-            return query_snippet
-        return self._trim_graph_snippet(
-            f"{query_snippet} ... {prefix_snippet}",
-            max_chars=max_chars,
-        )
-
-    @staticmethod
-    def _split_sentences(content: str) -> List[str]:
-        return [
-            " ".join(part.split())
-            for part in _SENTENCE_SPLIT_RE.split(content)
-            if part and part.strip()
-        ]
-
-    @staticmethod
-    def _trim_graph_snippet(text: str, *, max_chars: int) -> str:
-        collapsed = " ".join(str(text or "").split())
-        if len(collapsed) <= max_chars:
-            return collapsed
-        if max_chars <= 3:
-            return collapsed[:max_chars]
-
-        clipped = collapsed[: max_chars - 3].rstrip()
-        sentence_boundary = max(clipped.rfind(". "), clipped.rfind("? "), clipped.rfind("! "))
-        if sentence_boundary >= int(max_chars * 0.5):
-            clipped = clipped[: sentence_boundary + 1].rstrip()
-        else:
-            word_boundary = clipped.rfind(" ")
-            if word_boundary >= int(max_chars * 0.8):
-                clipped = clipped[:word_boundary].rstrip()
-        return f"{clipped}..."
 
     def _node_degree(self, uri: str) -> int:
         if not self._graph_index.has_node(uri):
@@ -968,10 +840,8 @@ class GraphRetriever:
         self,
         candidates: List[Dict[str, Any]],
         ctx: RequestContext,
-        *,
-        query_text: str | None = None,
     ) -> List[Dict[str, Any]]:
-        """Read content for graph-discovered memories and attach compact snippets."""
+        """Read plain content for graph-discovered memory nodes."""
         graph_uris = {
             candidate["uri"]
             for candidate in candidates
@@ -992,12 +862,7 @@ class GraphRetriever:
                 content = await viking_fs.read_file(uri, ctx=ctx)
                 if content:
                     mf = MemoryFileUtils.read(content, uri=uri)
-                    plain_content = mf.plain_content()
-                    candidate["_graph_full_abstract"] = plain_content
-                    candidate["abstract"] = self._select_graph_snippet(
-                        content=plain_content,
-                        query_text=query_text,
-                    )
+                    candidate["abstract"] = mf.plain_content()
             except Exception:
                 logger.debug("[GraphRetriever] failed to read graph node %s", uri)
 
