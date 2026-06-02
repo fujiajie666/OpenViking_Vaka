@@ -418,6 +418,17 @@ class TestWikiLink:
 
         assert link_type_schema["type"] == "string"
         assert "enum" not in link_type_schema
+        assert "deployment-specific" in link_type_schema["description"]
+        assert "Fall back to related_to" in link_type_schema["description"]
+
+    def test_link_schema_describes_weight_calibration(self):
+        schema = WikiLink.model_json_schema()
+        weight_description = schema["properties"]["weight"]["description"]
+        link_description = schema["properties"]["description"]["description"]
+
+        assert "0.85-1.0" in weight_description
+        assert "broad person" in weight_description
+        assert "people, objects, places, dates" in link_description
 
 class TestIntegration:
     """Integration tests for the complete schema system."""

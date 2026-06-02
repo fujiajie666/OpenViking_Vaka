@@ -9,13 +9,34 @@ import pytest
 from openviking.session.memory.dataclass import MemoryField, MemoryFile, MemoryTypeSchema, ResolvedOperation, WikiLink
 from openviking.session.memory.merge_op import FieldType, MergeOp
 from openviking.session.memory.page_id_map import PageIdMap
-from openviking.session.memory.extract_loop import ExtractLoop
+from openviking.session.memory.extract_loop import ExtractLoop, _build_link_rules
 
 
 class AttrDict(dict):
     __getattr__ = dict.get
 
 
+
+
+def test_link_rules_include_deployment_specific_guidance():
+    rules = _build_link_rules(
+        SimpleNamespace(
+            link_enabled=True,
+            link_type_guidance=(
+                "For LoCoMo category 1 questions, prefer locomo_activity, "
+                "locomo_place, and locomo_pet."
+            ),
+        )
+    )
+
+    assert "## Link Rules" in rules
+    assert "Additional deployment-specific link guidance" in rules
+    assert "locomo_activity" in rules
+    assert "locomo_pet" in rules
+
+
+def test_link_rules_omit_guidance_when_links_disabled():
+    assert _build_link_rules(SimpleNamespace(link_enabled=False)) == ""
 
 
 class TestResolveOperations:

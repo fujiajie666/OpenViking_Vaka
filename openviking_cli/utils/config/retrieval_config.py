@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-from typing import Dict
+from typing import Dict, Literal
 
 from pydantic import BaseModel, Field
 
@@ -40,6 +40,15 @@ class RetrievalConfig(BaseModel):
             "0 disables graph retrieval entirely; higher values give graph-supported "
             "candidates more room to move toward the strongest semantic score. "
             "Only effective when memory.link_enabled is True."
+        ),
+    )
+    graph_strategy: Literal["legacy", "mnemis_lite"] = Field(
+        default="legacy",
+        description=(
+            "Graph retrieval strategy used when memory.link_enabled is True and "
+            "graph_alpha > 0. 'legacy' preserves the existing evidence-gated "
+            "append behavior; 'mnemis_lite' enables the experimental dual-route "
+            "graph strategy."
         ),
     )
     graph_ppr_restart: float = Field(

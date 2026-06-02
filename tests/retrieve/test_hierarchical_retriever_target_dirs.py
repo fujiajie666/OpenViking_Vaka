@@ -167,6 +167,46 @@ def test_graph_final_contexts_preserve_semantic_topk_and_append_graph_auxiliary(
     ]
 
 
+def test_graph_final_contexts_allow_more_auxiliary_for_coverage_queries():
+    retriever = HierarchicalRetriever(storage=DummyStorage(), embedder=None, rerank_config=None)
+    semantic = [
+        MatchedContext(
+            uri=f"viking://user/u/memories/events/{idx}.md",
+            context_type=ContextType.MEMORY,
+            score=1.0 - idx * 0.1,
+        )
+        for idx in range(2)
+    ]
+    graph = [
+        MatchedContext(
+            uri=f"viking://user/u/memories/events/graph-{idx}.md",
+            context_type=ContextType.MEMORY,
+            score=0.9 - idx * 0.01,
+            match_reason="Discovered via graph expansion",
+            debug_metadata={
+                "strategy": "mnemis_lite_v1",
+                "query_type": "list_or_set",
+                "coverage_mode": True,
+            },
+        )
+        for idx in range(9)
+    ]
+
+    selected = retriever._select_final_contexts(
+        [*semantic, *graph],
+        limit=2,
+        graph_expanded=True,
+    )
+
+    assert [context.uri for context in selected[:2]] == [
+        "viking://user/u/memories/events/0.md",
+        "viking://user/u/memories/events/1.md",
+    ]
+    assert [context.uri for context in selected[2:]] == [
+        f"viking://user/u/memories/events/graph-{idx}.md" for idx in range(8)
+    ]
+
+
 @pytest.mark.asyncio
 async def test_graph_expand_skips_empty_candidates_before_building_index():
     retriever = HierarchicalRetriever(storage=DummyStorage(), embedder=None, rerank_config=None)

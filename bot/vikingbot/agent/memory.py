@@ -1,6 +1,7 @@
 """Memory system for persistent agent memory."""
 
 import asyncio
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,27 @@ from loguru import logger
 from vikingbot.config.loader import load_config
 from vikingbot.openviking_mount.ov_server import VikingClient
 from vikingbot.utils.helpers import ensure_dir
+
+
+COVERAGE_QUERY_TYPES = {"count", "list_or_set", "multi_hop"}
+DEFAULT_USER_MEMORY_CHARS = 4000
+COVERAGE_USER_MEMORY_CHARS = 6000
+
+
+def _has_coverage_graph_debug(graph_debug: Any) -> bool:
+    if not isinstance(graph_debug, list):
+        return False
+    return any(
+        isinstance(entry, dict)
+        and (entry.get("coverage_mode") or entry.get("query_type") in COVERAGE_QUERY_TYPES)
+        for entry in graph_debug
+    )
+
+
+def _user_memory_char_budget(graph_debug: Any) -> int:
+    if _has_coverage_graph_debug(graph_debug):
+        return COVERAGE_USER_MEMORY_CHARS
+    return DEFAULT_USER_MEMORY_CHARS
 
 
 class MemoryStore:
@@ -27,7 +49,12 @@ class MemoryStore:
         return ""
 
     async def _parse_viking_memory(
-        self, result: Any, client: Any, min_score: float = 0.3, max_chars: int = 4000
+        self,
+        result: Any,
+        client: Any,
+        min_score: float = 0.3,
+        max_chars: int = 4000,
+        query_text: str | None = None,
     ) -> str:
         """Parse viking memory with score filtering and character limit.
         Automatically reads full content for memories above threshold.
@@ -61,16 +88,85 @@ class MemoryStore:
                 else getattr(m, "match_reason", "")
             )
 
+        def get_debug_metadata(m):
+            return (
+                m.get("debug_metadata", {})
+                if isinstance(m, dict)
+                else getattr(m, "debug_metadata", {})
+            ) or {}
+
+        def safe_float(value: Any) -> float:
+            return float(value) if isinstance(value, (int, float)) else 0.0
+
+        normalized_query = (query_text or "").lower()
+        recommendation_query = re.search(
+            r"\b(recommendations?|advice|pointers?|tips|suggestions?)\b",
+            normalized_query,
+        )
+        giver_match = re.search(r"\bfrom\s+([a-z][a-z0-9_-]*)", normalized_query)
+        recipient_match = re.search(
+            r"\b(?:has|have)\s+([a-z][a-z0-9_-]*)\s+received\b",
+            normalized_query,
+        )
+        recommendation_terms = r"recommend\w*|advi[cs]\w*|pointer\w*|tip\w*|suggest\w*|shared?|provided|told"
+        giver = giver_match.group(1) if giver_match else ""
+        recipient = recipient_match.group(1) if recipient_match else ""
+
+        def recommendation_direction_signal(m) -> float:
+            if not recommendation_query:
+                return 0.0
+            text = f"{get_uri(m)} {get_abstract(m)}".lower()
+            intent_signal = 1.0 if re.search(recommendation_terms, text) else 0.0
+            if not giver or not recipient:
+                return intent_signal
+            giver_action = re.search(rf"\b{re.escape(giver)}\b.*\b(?:{recommendation_terms})\b", text)
+            recipient_action = re.search(
+                rf"\b{re.escape(recipient)}\b.*\b(?:{recommendation_terms})\b",
+                text,
+            )
+            recipient_present = re.search(rf"\b{re.escape(recipient)}\b", text)
+            giver_present = re.search(rf"\b{re.escape(giver)}\b", text)
+            if giver_action and recipient_present:
+                return 3.0
+            if recipient_action and giver_present:
+                return -1.0
+            return intent_signal
+
+        def is_coverage_graph_memory(m) -> bool:
+            metadata = get_debug_metadata(m)
+            return bool(metadata.get("coverage_mode")) or metadata.get("query_type") in {
+                "count",
+                "list_or_set",
+                "multi_hop",
+            }
+
+        def graph_snippet_priority(m) -> tuple[float, float, float, float, float]:
+            metadata = get_debug_metadata(m)
+            snippet_score = metadata.get("snippet_score", {})
+            if not isinstance(snippet_score, dict):
+                snippet_score = {}
+            return (
+                recommendation_direction_signal(m),
+                safe_float(snippet_score.get("overlap")),
+                safe_float(metadata.get("own_evidence")),
+                safe_float(metadata.get("total_evidence")),
+                safe_float(snippet_score.get("density")),
+                safe_float(get_score(m)),
+            )
+
         filtered_memories = [memory for memory in result if get_score(memory) >= min_score]
         filtered_memories.sort(key=get_score, reverse=True)
         graph_snippet_memories = [memory for memory in filtered_memories if get_match_reason(memory)]
         filtered_memories = [memory for memory in filtered_memories if not get_match_reason(memory)]
+        graph_snippet_memories.sort(key=graph_snippet_priority, reverse=True)
 
         user_memories = []
+        link_only_memories: list[tuple[str, float]] = []
         total_chars = 0
         seen_content_hashes = set()
+        next_index = 1
 
-        for idx, memory in enumerate(filtered_memories, start=1):
+        for memory in filtered_memories:
             uri = get_uri(memory)
             abstract = get_abstract(memory)
             score = get_score(memory)
@@ -93,7 +189,7 @@ class MemoryStore:
             if content:
                 # Try full version first (no abstract when content is present)
                 full_memory_str = (
-                    f'<memory index="{idx}" type="full">\n'
+                    f'<memory index="{next_index}" type="full">\n'
                     f"  <uri>{uri}</uri>\n"
                     f"  <score>{score}</score>\n"
                     f"  <content>{content}</content>\n"
@@ -106,41 +202,31 @@ class MemoryStore:
                 if total_chars + full_chars <= max_chars:
                     user_memories.append(full_memory_str)
                     total_chars += full_chars
+                    next_index += 1
                 else:
-                    # Full version too big, use link-only version (always add)
-                    link_only_str = (
-                        f'<memory index="{idx}" type="link">\n'
-                        f"  <uri>{uri}</uri>\n"
-                        f"  <score>{score}</score>\n"
-                        f"</memory>"
-                    )
-                    user_memories.append(link_only_str)
-                    # Don't count link-only towards max_chars
+                    link_only_memories.append((uri, score))
             else:
                 # No content available, use link-only version (always add)
                 logger.info(f"Using link-only for {uri} (read failed or empty)")
-                memory_str = (
-                    f'<memory index="{idx}" type="link">\n'
-                    f"  <uri>{uri}</uri>\n"
-                    f"  <score>{score}</score>\n"
-                    f"</memory>"
-                )
-                user_memories.append(memory_str)
-                # Don't count link-only towards max_chars
+                link_only_memories.append((uri, score))
 
+        coverage_graph_snippets = any(
+            is_coverage_graph_memory(memory) for memory in graph_snippet_memories
+        )
         graph_snippet_chars = 0
-        graph_snippet_budget = 800
+        graph_snippet_budget = 3200 if coverage_graph_snippets else 800
+        graph_snippet_max_chars = 600 if coverage_graph_snippets else 360
+        graph_snippet_limit = 8 if coverage_graph_snippets else 3
         graph_snippet_count = 0
-        next_index = len(user_memories) + 1
         for memory in graph_snippet_memories:
-            if graph_snippet_count >= 3:
+            if graph_snippet_count >= graph_snippet_limit:
                 break
             uri = get_uri(memory)
             abstract = " ".join(get_abstract(memory).split())
             if not uri or not abstract:
                 continue
-            if len(abstract) > 360:
-                abstract = abstract[:357].rstrip() + "..."
+            if len(abstract) > graph_snippet_max_chars:
+                abstract = abstract[: graph_snippet_max_chars - 3].rstrip() + "..."
             score = get_score(memory)
             memory_str = (
                 f'<memory index="{next_index}" type="graph_snippet">\n'
@@ -154,6 +240,16 @@ class MemoryStore:
             user_memories.append(memory_str)
             graph_snippet_chars += len(memory_str)
             graph_snippet_count += 1
+            next_index += 1
+
+        for uri, score in link_only_memories:
+            memory_str = (
+                f'<memory index="{next_index}" type="link">\n'
+                f"  <uri>{uri}</uri>\n"
+                f"  <score>{score}</score>\n"
+                f"</memory>"
+            )
+            user_memories.append(memory_str)
             next_index += 1
 
         return "\n".join(user_memories)
@@ -215,10 +311,18 @@ class MemoryStore:
             raw_memories_log = "\n".join(memory_list)
             logger.info(f"[RAW_MEMORIES]\n{raw_memories_log}")
             user_memory = await self._parse_viking_memory(
-                result["user_memory"], client, min_score=0.1, max_chars=4000
+                result["user_memory"],
+                client,
+                min_score=0.1,
+                max_chars=_user_memory_char_budget(graph_debug),
+                query_text=current_message,
             )
             agent_memory = await self._parse_viking_memory(
-                result["agent_memory"], client, min_score=0.1, max_chars=2000
+                result["agent_memory"],
+                client,
+                min_score=0.1,
+                max_chars=2000,
+                query_text=current_message,
             )
             return f"### user memories:\n{user_memory}\n### agent memories:\n{agent_memory}"
         except Exception as e:

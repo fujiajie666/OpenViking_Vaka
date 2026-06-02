@@ -107,6 +107,14 @@ class MemoryConfig(BaseModel):
             "no page_id or link fields are generated, and link resolution is skipped."
         ),
     )
+    link_type_guidance: str = Field(
+        default="",
+        description=(
+            "Optional deployment-specific instructions for choosing link_type, weight, "
+            "match_text, and description when link_enabled is true. Keep empty for the "
+            "default generic link extraction behavior."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
 

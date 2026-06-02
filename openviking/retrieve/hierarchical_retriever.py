@@ -49,6 +49,8 @@ class HierarchicalRetriever:
     MAX_CONVERGENCE_ROUNDS = 3  # Stop after multiple rounds with unchanged topk
     MAX_RELATIONS = 5  # Maximum relations per resource
     GRAPH_AUXILIARY_RESULT_LIMIT = 3  # Graph recalls are appended, not competing.
+    GRAPH_COVERAGE_AUXILIARY_RESULT_LIMIT = 8
+    GRAPH_COVERAGE_QUERY_TYPES = {"count", "list_or_set", "multi_hop"}
     DIRECTORY_DOMINANCE_RATIO = 1.2  # Directory score must exceed max child score
     GLOBAL_SEARCH_TOPK = 10  # Global retrieval count (more candidates = better rerank precision)
     MAX_PARALLEL_CHILD_SEARCHES = 4  # Limit per-request fan-out against remote vector stores
@@ -276,7 +278,18 @@ class HierarchicalRetriever:
 
         semantic = [context for context in matched if not context.match_reason]
         graph = [context for context in matched if context.match_reason]
-        return semantic[:limit] + graph[: self.GRAPH_AUXILIARY_RESULT_LIMIT]
+        return semantic[:limit] + graph[: self._graph_auxiliary_result_limit(graph)]
+
+    @classmethod
+    def _graph_auxiliary_result_limit(cls, graph: List[MatchedContext]) -> int:
+        """Use extra graph evidence only for coverage-style queries."""
+        for context in graph:
+            metadata = context.debug_metadata or {}
+            if metadata.get("coverage_mode") is True:
+                return cls.GRAPH_COVERAGE_AUXILIARY_RESULT_LIMIT
+            if metadata.get("query_type") in cls.GRAPH_COVERAGE_QUERY_TYPES:
+                return cls.GRAPH_COVERAGE_AUXILIARY_RESULT_LIMIT
+        return cls.GRAPH_AUXILIARY_RESULT_LIMIT
 
     async def _global_vector_search(
         self,
@@ -610,7 +623,6 @@ class HierarchicalRetriever:
             return candidates
 
         from openviking.retrieve.graph.graph_index import get_graph_index
-        from openviking.retrieve.graph.graph_retriever import GraphRetriever
 
         index = get_graph_index(space_uris)
         if not index.is_fresh(space_uris):
@@ -620,7 +632,14 @@ class HierarchicalRetriever:
             logger.debug("[HierarchicalRetriever] Graph index empty, skipping graph expansion")
             return candidates
 
-        graph_retriever = GraphRetriever(index, self.retrieval_config)
+        if self.retrieval_config.graph_strategy == "mnemis_lite":
+            from openviking.retrieve.graph.mnemis_lite import MnemisLiteGraphRetriever
+
+            graph_retriever = MnemisLiteGraphRetriever(index, self.retrieval_config)
+        else:
+            from openviking.retrieve.graph.graph_retriever import GraphRetriever
+
+            graph_retriever = GraphRetriever(index, self.retrieval_config)
         expanded = await graph_retriever.expand(
             candidates,
             ctx,
