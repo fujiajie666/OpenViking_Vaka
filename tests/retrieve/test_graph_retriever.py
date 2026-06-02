@@ -305,6 +305,7 @@ def test_query_aligned_graph_candidate_can_enter_below_semantic_ceiling():
     assert by_uri["viking://node2"]["_graph_debug"]["accepted_reason"] == "accepted"
     assert by_uri["viking://node2"]["_graph_debug"]["uri_kind"] == "event"
     assert by_uri["viking://node2"]["_graph_debug"]["snippet_score"]["overlap"] > 0
+    assert by_uri["viking://node2"]["_graph_debug"]["prompt_score"] > 0
     assert by_uri["viking://node2"]["_final_score"] > by_uri["viking://weak"][
         "_final_score"
     ]
@@ -533,4 +534,34 @@ def test_select_expanded_candidates_preserves_semantic_then_appends_graph():
         "viking://semantic_low",
         "viking://graph_a",
         "viking://graph_b",
+    ]
+
+
+def test_select_expanded_candidates_ranks_graph_by_prompt_score():
+    retriever = GraphRetriever(
+        _build_test_index(),
+        RetrievalConfig(graph_alpha=0.4, graph_expansion_topk=5),
+    )
+    candidates = [
+        {"uri": "viking://semantic", "_final_score": 1.0},
+        {
+            "uri": "viking://graph_high_final_score",
+            "_final_score": 0.9,
+            "_graph_prompt_score": 0.1,
+            "_from_graph": True,
+        },
+        {
+            "uri": "viking://graph_high_prompt_score",
+            "_final_score": 0.7,
+            "_graph_prompt_score": 0.8,
+            "_from_graph": True,
+        },
+    ]
+
+    selected = retriever._select_expanded_candidates(candidates, limit=1)
+
+    assert [candidate["uri"] for candidate in selected] == [
+        "viking://semantic",
+        "viking://graph_high_prompt_score",
+        "viking://graph_high_final_score",
     ]

@@ -457,6 +457,7 @@ class GraphRetriever:
                 candidate,
                 query_text,
             )
+            candidate["_graph_prompt_score"] = self._graph_prompt_score(candidate)
             candidate["_graph_debug"] = self._candidate_graph_debug(candidate)
             if accepted:
                 accepted_count += 1
@@ -510,7 +511,7 @@ class GraphRetriever:
         )
         graph_candidates = sorted(
             graph_candidates,
-            key=lambda candidate: candidate.get("_final_score", 0.0),
+            key=self._graph_candidate_prompt_sort_key,
             reverse=True,
         )
         graph_limit = max(0, min(len(graph_candidates), self._config.graph_expansion_topk))
@@ -569,7 +570,30 @@ class GraphRetriever:
             "accepted_reason": str(candidate.get("_graph_accept_reason", "not_scored")),
             "final_score": self._finite_float(candidate.get("_final_score", 0.0)),
             "graph_boost": self._finite_float(candidate.get("_graph_boost", 0.0)),
+            "prompt_score": self._finite_float(candidate.get("_graph_prompt_score", 0.0)),
         }
+
+    def _graph_prompt_score(self, candidate: Dict[str, Any]) -> float:
+        """Rank accepted graph snippets by answer-side evidence, not semantic score."""
+        own_evidence = self._finite_float(candidate.get("_graph_evidence_own", 0.0))
+        total_evidence = self._finite_float(candidate.get("_graph_query_evidence", 0.0))
+        path_signal = self._finite_float(candidate.get("_graph_path_signal", 0.0))
+        specificity = candidate.get("_graph_specificity", 1.0)
+        if not isinstance(specificity, (int, float)) or not math.isfinite(specificity):
+            specificity = 1.0
+
+        score = own_evidence * (1.0 + total_evidence) * (1.0 + path_signal) * specificity
+        return max(0.0, score)
+
+    @staticmethod
+    def _graph_candidate_prompt_sort_key(candidate: Dict[str, Any]) -> tuple[float, float]:
+        prompt_score = candidate.get("_graph_prompt_score", 0.0)
+        final_score = candidate.get("_final_score", 0.0)
+        if not isinstance(prompt_score, (int, float)) or not math.isfinite(prompt_score):
+            prompt_score = 0.0
+        if not isinstance(final_score, (int, float)) or not math.isfinite(final_score):
+            final_score = 0.0
+        return float(prompt_score), float(final_score)
 
     def _graph_accept_reason(
         self,

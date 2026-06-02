@@ -168,6 +168,57 @@ def test_graph_final_contexts_preserve_semantic_topk_and_append_graph_auxiliary(
 
 
 @pytest.mark.asyncio
+async def test_convert_to_matched_contexts_preserves_graph_candidate_order(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.get_viking_fs",
+        lambda: None,
+    )
+    retriever = HierarchicalRetriever(storage=DummyStorage(), embedder=None, rerank_config=None)
+    ctx = RequestContext(user=UserIdentifier("acc1", "sample_0", "agent1"), role=Role.ROOT)
+    candidates = [
+        {
+            "uri": "viking://user/u/memories/events/semantic-low.md",
+            "context_type": "memory",
+            "level": 2,
+            "_final_score": 0.1,
+        },
+        {
+            "uri": "viking://user/u/memories/events/semantic-high.md",
+            "context_type": "memory",
+            "level": 2,
+            "_final_score": 0.9,
+        },
+        {
+            "uri": "viking://user/u/memories/events/graph-first.md",
+            "context_type": "memory",
+            "level": 2,
+            "_final_score": 0.1,
+            "_from_graph": True,
+        },
+        {
+            "uri": "viking://user/u/memories/events/graph-second.md",
+            "context_type": "memory",
+            "level": 2,
+            "_final_score": 0.9,
+            "_from_graph": True,
+        },
+    ]
+
+    matched = await retriever._convert_to_matched_contexts(candidates, ctx=ctx)
+
+    semantic = [context.uri for context in matched if not context.match_reason]
+    graph = [context.uri for context in matched if context.match_reason]
+    assert semantic == [
+        "viking://user/u/memories/events/semantic-high.md",
+        "viking://user/u/memories/events/semantic-low.md",
+    ]
+    assert graph == [
+        "viking://user/u/memories/events/graph-first.md",
+        "viking://user/u/memories/events/graph-second.md",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_graph_expand_skips_empty_candidates_before_building_index():
     retriever = HierarchicalRetriever(storage=DummyStorage(), embedder=None, rerank_config=None)
     ctx = RequestContext(user=UserIdentifier("acc1", "sample_0", "agent1"), role=Role.ROOT)
