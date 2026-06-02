@@ -760,12 +760,9 @@ class HierarchicalRetriever:
                 )
             )
 
-        # Re-sort semantic memories by blended score, while preserving graph
-        # candidate order from GraphRetriever's graph-only ranking.
-        semantic_results = [context for context in results if not context.match_reason]
-        graph_results = [context for context in results if context.match_reason]
-        semantic_results.sort(key=lambda x: x.score, reverse=True)
-        return semantic_results + graph_results
+        # Re-sort by blended score so hotness boost can change ranking
+        results.sort(key=lambda x: x.score, reverse=True)
+        return results
 
     @classmethod
     def _append_level_suffix(cls, uri: str, level: int) -> str:
