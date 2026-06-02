@@ -924,7 +924,7 @@ class GraphRetriever:
         profile_like = (
             "/entities/person/" in uri
             or uri.endswith("/profile.md")
-            or memory_type in {"profile", "person"}
+            or memory_type in {"profile"}
             or category in {"person", "profile"}
         )
         return profile_like or degree >= _HIGH_RISK_GRAPH_DEGREE
