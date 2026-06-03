@@ -585,7 +585,7 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `model` | str | Model name |
 | `api_base` | str | API endpoint (optional) |
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
-| `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `100`) |
+| `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `64`) |
 | `max_retries` | int | Maximum retry attempts for transient VLM provider errors (default: `3`; `0` disables retry) |
 | `backup` | object | Optional backup VLM configuration (same shape as `vlm`) for automatic failover when the primary fails with retryable errors such as rate limits, `5xx` responses, or connection/timeout failures. Only one level of failover is supported &mdash; the backup itself cannot define a nested `backup` |
 | `timeout` | float | Per-request HTTP timeout in seconds passed to the underlying OpenAI/LiteLLM client. Increase for slow endpoints (e.g., DashScope, local inference). Must be `> 0` (default: `60.0`) |
@@ -1042,7 +1042,7 @@ Vector database storage configuration
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), or 'vikingdb' (private deployment) | "local" |
+| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), 'qdrant', or 'opengauss' | "local" |
 | `name` | str | VectorDB collection name | "context" |
 | `url` | str | Remote service URL for 'http' type (e.g., 'http://localhost:5000') | null |
 | `project_name` | str | Project name (alias project) | "default" |
@@ -1051,6 +1051,8 @@ Vector database storage configuration
 | `sparse_weight` | float | Sparse weight for hybrid vector search, only effective when using hybrid index | 0.0 |
 | `volcengine` | object | 'volcengine' type VikingDB configuration | - |
 | `vikingdb` | object | 'vikingdb' type private deployment configuration | - |
+| `qdrant` | object | 'qdrant' type Qdrant configuration | - |
+| `opengauss` | object | 'opengauss' native vector backend configuration | - |
 
 Default local mode
 ```
@@ -1082,6 +1084,39 @@ Supports cloud-deployed VikingDB on Volcengine
   }
 }
 ```
+</details>
+
+<details>
+<summary><b>openGauss</b></summary>
+
+Requires an openGauss server with native `vector` support and a remote-capable database user.
+Install the optional driver with `pip install "openviking[opengauss]"`.
+In the official container, the initial `omm` user may be restricted for remote login; create a normal user for OpenViking if needed.
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "name": "context",
+      "backend": "opengauss",
+      "project": "default",
+      "distance_metric": "cosine",
+      "dimension": 1024,
+      "opengauss": {
+        "host": "127.0.0.1",
+        "port": 5432,
+        "user": "openviking",
+        "password": "your-password",
+        "db_name": "postgres",
+        "schema": "public",
+        "mode": "standalone"
+      }
+    }
+  }
+}
+```
+
+Set `mode` to `"distributed"` for openGauss distributed deployments; OpenViking will attempt to mark metadata tables as reference tables and distribute collection tables by `id`.
 </details>
 
 
@@ -1116,6 +1151,7 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 ```json
 {
   "memory": {
+    "version": "v2",
     "agent_scope_mode": "user+agent"
   }
 }
@@ -1123,13 +1159,14 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 
 | Field | Description | Default |
 |-------|-------------|---------|
+| `version` | Memory implementation version. Only `"v2"` is supported (legacy `"v1"` removed in #2264 — passing `"v1"` now raises a `ValueError` at config load). | `"v2"` |
 | `agent_scope_mode` | Deprecated and ignored. Kept only for backward compatibility with older `ov.conf` files. Agent/user namespace behavior is now controlled by per-account namespace policy. | `"user+agent"` |
 
 `agent_scope_mode` no longer changes namespace behavior. The server now uses account-level namespace policy to choose between `viking://agent/{agent_id}/...` and `viking://agent/{agent_id}/user/{user_id}/...`.
 
 ### ovcli.conf
 
-You can edit this file by hand, or generate it interactively with `ov config setup-cli`. If you maintain configurations for multiple servers, switch between them with `ov config switch`.
+You can edit this file by hand, or generate it interactively with `ov config`. If you maintain configurations for multiple servers, switch between them with `ov config switch`.
 
 Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI to connect to a remote server:
 
@@ -1384,7 +1421,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "model": "string",
     "api_base": "string",
     "thinking": false,
-    "max_concurrent": 100,
+    "max_concurrent": 64,
     "max_retries": 3,
     "extra_headers": {},
     "extra_request_body": {},

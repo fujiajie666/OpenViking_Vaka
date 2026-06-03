@@ -27,6 +27,8 @@
 
 ---
 
+✨ **2026年5月更新**：更新 OpenViking 在 User Memory、Agent Memory 和知识库问答三场景上的评测结果。→ 见 [评测结果](#-评测结果)。
+
 ## 概述
 
 ### 智能体开发面临的挑战
@@ -286,7 +288,7 @@ openviking-server doctor
     "provider" : "<provider-type>",    // 提供商类型 (volcengine, openai, azure, openai-codex 等)
     "api_version": "2025-01-01-preview", // （仅 azure）API 版本，可选，默认 "2025-01-01-preview"
     "model"    : "<model-name>",       // VLM 模型名称或 Azure 部署名
-    "max_concurrent": 100              // 语义处理的最大并发 LLM 调用（默认：100）
+    "max_concurrent": 64              // 语义处理的最大并发 LLM 调用（默认：64）
   }
 }
 ```
@@ -324,7 +326,7 @@ openviking-server doctor
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
     "model"    : "doubao-seed-2-0-pro-260215",
-    "max_concurrent": 100
+    "max_concurrent": 64
   }
 }
 ```
@@ -358,7 +360,7 @@ openviking-server doctor
     "api_key"  : "your-openai-api-key",
     "provider" : "openai",
     "model"    : "gpt-4-vision-preview",
-    "max_concurrent": 100
+    "max_concurrent": 64
   }
 }
 ```
@@ -394,7 +396,7 @@ openviking-server doctor
     "provider" : "azure",
     "api_version": "2025-01-01-preview",
     "model"    : "gpt-4o",
-    "max_concurrent": 100
+    "max_concurrent": 64
   }
 }
 ```
@@ -432,7 +434,7 @@ set "OPENVIKING_CONFIG_FILE=%USERPROFILE%\.openviking\ov.conf"
 
 #### CLI/客户端配置示例
 
-你可以通过 `ov config setup-cli` 命令来以交互式方式初始化 CLI/客户端的配置。如果你有多个 openviking 服务器，你还可以通过 `ov config switch` 命令来切换到其他配置。
+你可以通过 `ov config` 命令来以交互式方式初始化 CLI/客户端的配置。如果你有多个 openviking 服务器，你还可以通过 `ov config switch` 命令来切换到其他配置。
 
 👇 展开查看您的 CLI/客户端的配置示例：
 
@@ -545,25 +547,96 @@ OpenViking 的核心价值主张：**在更高问答准确率的同时，消耗�
 
 #### 1.1 各 Agent 基座上的 LOCOMO 测试结果
 
-| 实验编号 | 方案 | Query 平均耗时 | 问答准确率 | Agent 总输入 Token |
-|---------|------|--------------|-----------|------------------|
-| **OpenClaw 基座** | | | | |
-| 1 | OpenClaw + 原生 memory-core | 95.14s | 24.20% | 392,559,404 |
-| 2 | OpenClaw + Mem0 | **37.6s** | 56.62% | 42,118,285 |
-| 3 | OpenClaw + SuperMemory | 109.3s | 42.99% | 88,304,113 |
-| 4 | OpenClaw + 百炼记忆库 | 41.6s | 39.55% | 35,206,037 |
-| **5** | **OpenClaw + OpenViking** | **38.8s** | **82.08%** | **37,423,456** |
-| **Hermes 基座** | | | | |
-| 6 | Hermes Native Memory | 82.4s (3.57 轮/query) | 33.38% | 79,228,398 |
-| **7** | **Hermes + OpenViking** | **27.9s** (1.55 轮/query) | **82.86%** | **52,026,755** |
-| **Claude Code 基座** | | | | |
-| 8 | Claude Code Auto-Memory | 49.1s (7.2 轮/query) | 57.21% | 353,306,422 |
-| **9** | **Claude Code + OpenViking** | **20.4s** (2.6 轮/query) | **80.32%** | **129,968,899** |
+<table style="width: 100%; table-layout: fixed;">
+  <thead>
+    <tr>
+      <th style="text-align: center; width: 12%;">实验编号</th>
+      <th style="text-align: center; width: 30%;">方案</th>
+      <th style="text-align: center; width: 20%;">Query 平均耗时</th>
+      <th style="text-align: center; width: 14%;">问答准确率</th>
+      <th style="text-align: center; width: 24%;">Agent 总输入 Token</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td colspan="5" style="text-align: center; font-weight: bold;">OpenClaw 基座</td>
+    </tr>
+    <tr>
+      <td style="text-align: center;">1</td>
+      <td style="text-align: center;">OpenClaw + 原生 memory-core</td>
+      <td style="text-align: right; white-space: nowrap;">95.14s</td>
+      <td style="text-align: right;">24.20%</td>
+      <td style="text-align: right;">392,559,404</td>
+    </tr>
+    <tr>
+      <td style="text-align: center;">2</td>
+      <td style="text-align: center;">OpenClaw + Mem0</td>
+      <td style="text-align: right; white-space: nowrap; font-weight: bold;">37.6s</td>
+      <td style="text-align: right;">56.62%</td>
+      <td style="text-align: right;">42,118,285</td>
+    </tr>
+    <tr>
+      <td style="text-align: center;">3</td>
+      <td style="text-align: center;">OpenClaw + SuperMemory</td>
+      <td style="text-align: right; white-space: nowrap;">109.3s</td>
+      <td style="text-align: right;">42.99%</td>
+      <td style="text-align: right;">88,304,113</td>
+    </tr>
+    <tr>
+      <td style="text-align: center;">4</td>
+      <td style="text-align: center;">OpenClaw + 百炼记忆库</td>
+      <td style="text-align: right; white-space: nowrap;">41.6s</td>
+      <td style="text-align: right;">39.55%</td>
+      <td style="text-align: right;">35,206,037</td>
+    </tr>
+    <tr>
+      <td style="text-align: center; font-weight: bold;">5</td>
+      <td style="text-align: center; font-weight: bold;">OpenClaw + OpenViking</td>
+      <td style="text-align: right; white-space: nowrap; font-weight: bold;">38.8s</td>
+      <td style="text-align: right; font-weight: bold;">82.08%</td>
+      <td style="text-align: right; font-weight: bold;">37,423,456</td>
+    </tr>
+    <tr>
+      <td colspan="5" style="text-align: center; font-weight: bold;">Hermes 基座</td>
+    </tr>
+    <tr>
+      <td style="text-align: center;">6</td>
+      <td style="text-align: center;">Hermes Native Memory</td>
+      <td style="text-align: right; white-space: nowrap;">82.4s (3.57轮/query)</td>
+      <td style="text-align: right;">33.38%</td>
+      <td style="text-align: right;">79,228,398</td>
+    </tr>
+    <tr>
+      <td style="text-align: center; font-weight: bold;">7</td>
+      <td style="text-align: center; font-weight: bold;">Hermes + OpenViking</td>
+      <td style="text-align: right; white-space: nowrap; font-weight: bold;">27.9s (1.55轮/query)</td>
+      <td style="text-align: right; font-weight: bold;">82.86%</td>
+      <td style="text-align: right; font-weight: bold;">52,026,755</td>
+    </tr>
+    <tr>
+      <td colspan="5" style="text-align: center; font-weight: bold;">Claude Code 基座</td>
+    </tr>
+    <tr>
+      <td style="text-align: center;">8</td>
+      <td style="text-align: center;">Claude Code Auto-Memory</td>
+      <td style="text-align: right; white-space: nowrap;">49.1s (7.2轮/query)</td>
+      <td style="text-align: right;">57.21%</td>
+      <td style="text-align: right;">353,306,422</td>
+    </tr>
+    <tr>
+      <td style="text-align: center; font-weight: bold;">9</td>
+      <td style="text-align: center; font-weight: bold;">Claude Code + OpenViking</td>
+      <td style="text-align: right; white-space: nowrap; font-weight: bold;">20.4s (2.6轮/query)</td>
+      <td style="text-align: right; font-weight: bold;">80.32%</td>
+      <td style="text-align: right; font-weight: bold;">129,968,899</td>
+    </tr>
+  </tbody>
+</table>
 
 #### 1.2 关键效率提升汇总
 
 | Agent | 准确率提升 | 时延降低 | Token 消耗降低 |
-|------|-----------|---------|--------------|
+|:-----:|----------:|---------:|--------------:|
 | OpenClaw | 24.20% → 82.08% (+3.39×) | -59.22% | **-91.0%** |
 | Hermes | 33.38% → 82.86% (+2.48×) | -66.10% | -34.3% |
 | Claude Code | 57.21% → 80.32% (+1.40×) | -58.45% | -63.2% |
@@ -577,7 +650,7 @@ OpenViking 的核心价值主张：**在更高问答准确率的同时，消耗�
 OpenViking 的 Agent Memory 分为两层：
 
 | 层级 | 概念 | 说明 |
-|-----|------|------|
+|:----:|:----:|:----:|
 | Layer 1 | **轨迹（Trajectory）** | 每次会话结束后自动提炼，记录"做了什么、怎么做的、结果如何" |
 | Layer 2 | **经验（Experience）** | 由多条相关轨迹归纳而来，跨会话可复用的策略性知识，"Situation / Approach / Reflect"三段式 |
 
@@ -586,7 +659,7 @@ OpenViking 的 Agent Memory 分为两层：
 港大数据科学实验室（HKUDS）构建的"实时经济生存 benchmark"，Agent 从 $10 起步，每次 LLM 调用自动扣费，收入来自完成专业任务（覆盖 44 个职业、220 个任务）。
 
 | 方案 | 完成 50 个任务后净收入 | 平均每小时 Token 消耗 |
-|-----|-------------------|------------------|
+|:----:|-------------------:|------------------:|
 | LLM only | $2,269.77 | 1,030.3K/h |
 | **LLM + OpenViking** | **$3,843.74 (+69.34%)** | **872.4K/h (-22.8%)** |
 
@@ -595,7 +668,7 @@ OpenViking 的 Agent Memory 分为两层：
 Sierra AI 发布的对话式 Agent 评测基准，覆盖 Retail 和 Airline 两个领域。
 
 | 方案 | Retail 正确率 | Airline 正确率 |
-|-----|-------------|--------------|
+|:----:|------------:|-------------:|
 | LLM 无记忆 | 70.94% | 54.38% |
 | **LLM + OpenViking 经验记忆** | **77.81% (+6.87pp)** | **66.25% (+11.87pp)** |
 
@@ -608,7 +681,7 @@ Sierra AI 发布的对话式 Agent 评测基准，覆盖 Retail 和 Airline 两�
 #### 3.1 多跳、多路 RAG 测试（HotpotQA 数据集）
 
 | 方案 | 检索范式 | Accuracy | 每 QA Token | 每 QA 耗时 |
-|-----|---------|---------|------------|---------|
+|:----:|:------:|---------:|-----------:|---------:|
 | Naive RAG | 向量检索 | 62.50% | 1,290 | **0.11s** |
 | HippoRAG 2 | 向量 + 知识图谱 | 61.00% | 726 | 20s |
 | LightRAG | 向量 + 知识图谱 | 89.00% | 28,443 | 75s |
@@ -621,7 +694,7 @@ Sierra AI 发布的对话式 Agent 评测基准，覆盖 Retail 和 Airline 两�
 #### 3.2 单轮 RAG 测试（5 个开源数据集均值）
 
 | 方案 | 检索范式 | 平均 Accuracy | 建库 Token | 每 QA Token | 检索耗时 |
-|-----|---------|-------------|----------|------------|--------|
+|:----:|:------:|-------------:|---------:|-----------:|-------:|
 | Naive RAG | 向量检索 | 53.93% | 2,755,356 | 1,435 | **0.13s** |
 | PageIndex | 向量 + 树结构 | 36.75% | 5,609,206 | 710,480 | 84.60s |
 | HippoRAG 2 | 向量 + 知识图谱 | 44.50% | 124,963,618 | **637** | 18.83s |
@@ -631,6 +704,16 @@ Sierra AI 发布的对话式 Agent 评测基准，覆盖 Retail 和 Airline 两�
 > 测试数据集：FinanceBench、NaturalQuestions、ClapNQ、Qasper、SyllabusQA。OpenViking 以极低耗时（0.19s）取得 66.87% 的平均准确率，建库成本仅为 LightRAG 的 13.8%。
 
 ---
+
+## 学术背书
+
+OpenViking 开源了论文 `VikingMem` 中描述的部分核心能力，使 AI 智能体开发者可以直接使用其中的上下文数据库与记忆管理理念。
+
+> **VikingMem: A Memory Base Management System for Stateful LLM-based Applications**
+> Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao.
+> arXiv:2605.29640, 2026。已被 VLDB 2026 接收。
+>
+> 📄 [阅读 arXiv 论文](https://arxiv.org/abs/2605.29640)
 
 ## VikingBot 部署详情
 
@@ -768,7 +851,7 @@ OpenViking 仍处于早期阶段，有许多改进和探索的空间。我们真
 OpenViking 项目不同组件采用不同的开源协议：
 
 - **主项目**: AGPLv3 - 详情请参见 [LICENSE](./LICENSE) 文件
-- **crates/ov_cli**: Apache 2.0 - 详情请参见 [LICENSE](./crates/ov_cli/LICENSE) 文件
+- **crates/ov_cli**: Apache 2.0 - 详情请参见 [LICENSE](./crates/LICENSE) 文件
 - **examples**: Apache 2.0 - 详情请参见 [LICENSE](./examples/LICENSE) 文件
 - **third_party**: 保留各三方项目的原有协议
 

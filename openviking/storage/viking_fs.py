@@ -16,6 +16,7 @@ import asyncio
 import contextvars
 import hashlib
 import json
+import os
 import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -83,6 +84,35 @@ def _is_directory_not_empty_error(message: str) -> bool:
             "directory is not empty",
         ]
     )
+
+
+def _get_cpu_count() -> int:
+    """Return the number of CPUs available to this process.
+
+    Tries process_cpu_count (Python 3.13+, cgroup-aware),
+    falls back to sched_getaffinity (Linux),
+    then os.cpu_count (may report host CPUs in containers).
+    """
+    if hasattr(os, "process_cpu_count"):
+        return os.process_cpu_count() or 1
+    try:
+        return len(os.sched_getaffinity(0))
+    except (AttributeError, NotImplementedError):
+        return os.cpu_count() or 1
+
+
+def _get_abstract_worker_count() -> int:
+    default = max(4, min(12, min(32, _get_cpu_count() + 4) // 2))
+    env_val = os.getenv("OPENVIKING_FILE_OPS_CONCURRENCY")
+    if env_val is not None:
+        try:
+            return max(1, int(env_val))
+        except ValueError:
+            pass
+    return max(1, default)
+
+
+_ABSTRACT_WORKER_COUNT = _get_abstract_worker_count()
 
 
 # ========== Dataclass ==========
@@ -610,15 +640,17 @@ class VikingFS:
             # Check if it's temp directory (files already encrypted)
             is_temp = old_uri.startswith("viking://temp/")
 
-            # Copy source to destination (source still intact)
+            # Copy source to destination. Source must stay intact until vector updates succeed.
             try:
-                if is_temp or not self._encryptor:
-                    await self._async_agfs.cp(old_path, new_path, recursive=is_dir)
-                else:
-                    if is_dir:
-                        await self._recursive_copy_dir_with_encryption(old_uri, new_uri, ctx=ctx)
-                    else:
-                        await self.move_file(old_uri, new_uri, ctx=ctx)
+                await self._copy_for_mv(
+                    old_uri=old_uri,
+                    new_uri=new_uri,
+                    old_path=old_path,
+                    new_path=new_path,
+                    is_dir=is_dir,
+                    is_temp=is_temp,
+                    ctx=ctx,
+                )
             except Exception as e:
                 if "not found" in str(e).lower():
                     await self._delete_from_vector_store(uris_to_move, ctx=ctx)
@@ -650,37 +682,56 @@ class VikingFS:
             await self._async_agfs.rm(old_path, recursive=is_dir)
             return {}
 
-    async def _recursive_copy_dir_with_encryption(
+    async def _copy_for_mv(
+        self,
+        old_uri: str,
+        new_uri: str,
+        old_path: str,
+        new_path: str,
+        is_dir: bool,
+        is_temp: bool,
+        ctx: Optional[RequestContext] = None,
+    ) -> None:
+        """Copy source to destination for mv without deleting source."""
+        if is_temp or not self._encryptor:
+            await self._async_agfs.cp(old_path, new_path, recursive=is_dir)
+            return
+
+        if is_dir:
+            await self._copy_dir_through_vikingfs(old_uri, new_uri, ctx=ctx)
+        else:
+            await self._copy_file_through_vikingfs(old_uri, new_uri, ctx=ctx)
+
+    async def _copy_dir_through_vikingfs(
         self,
         old_uri: str,
         new_uri: str,
         ctx: Optional[RequestContext] = None,
     ) -> None:
-        """Recursively copy a directory, ensuring files are encrypted."""
+        """Recursively copy a directory through VikingFS read/write hooks."""
         await self.mkdir(new_uri, exist_ok=True, ctx=ctx)
 
-        max_iterations = 10
-        iteration = 0
+        entries = await self.ls(old_uri, show_all_hidden=True, ctx=ctx)
+        for entry in entries:
+            name = entry.get("name", "")
+            if not name or name in (".", ".."):
+                continue
+            old_child_uri = f"{old_uri.rstrip('/')}/{name}"
+            new_child_uri = f"{new_uri.rstrip('/')}/{name}"
+            if entry.get("isDir"):
+                await self._copy_dir_through_vikingfs(old_child_uri, new_child_uri, ctx=ctx)
+            else:
+                await self._copy_file_through_vikingfs(old_child_uri, new_child_uri, ctx=ctx)
 
-        while iteration < max_iterations:
-            entries = await self.ls(old_uri, ctx=ctx)
-            if not entries:
-                break
-
-            for entry in entries:
-                name = entry.get("name", "")
-                if not name or name in (".", ".."):
-                    continue
-                old_child_uri = f"{old_uri.rstrip('/')}/{name}"
-                new_child_uri = f"{new_uri.rstrip('/')}/{name}"
-                if entry.get("isDir"):
-                    await self._recursive_copy_dir_with_encryption(
-                        old_child_uri, new_child_uri, ctx=ctx
-                    )
-                else:
-                    await self.move_file(old_child_uri, new_child_uri, ctx=ctx)
-
-            iteration += 1
+    async def _copy_file_through_vikingfs(
+        self,
+        from_uri: str,
+        to_uri: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> None:
+        """Copy one file through VikingFS read/write hooks without deleting source."""
+        content_bytes = await self.read_file_bytes(from_uri, ctx=ctx)
+        await self.write_file_bytes(to_uri, content_bytes, ctx=ctx)
 
     async def grep(
         self,
@@ -1100,27 +1151,51 @@ class VikingFS:
         abs_limit: int,
         ctx: Optional[RequestContext] = None,
     ) -> None:
-        """Batch fetch abstracts for entries.
+        """Batch fetch abstracts for entries using a fixed-size worker pool.
+
+        Non-directory entries receive an empty abstract immediately.
+        Directory entries are processed concurrently via a worker pool,
+        using _read_abstract_for_known_dir to skip redundant stat() calls.
 
         Args:
             entries: List of entries to fetch abstracts for
             abs_limit: Maximum length for abstract truncation
         """
-        semaphore = asyncio.Semaphore(6)
+        dir_jobs = []
+        for index, entry in enumerate(entries):
+            if not entry.get("isDir", False):
+                entry["abstract"] = ""
+                continue
+            dir_jobs.append((index, entry))
 
-        async def fetch_abstract(index: int, entry: Dict[str, Any]) -> tuple[int, str]:
-            async with semaphore:
-                if not entry.get("isDir", False):
-                    return index, ""
+        if not dir_jobs:
+            return
+
+        worker_count = min(_ABSTRACT_WORKER_COUNT, len(dir_jobs))
+
+        cursor = 0
+        cursor_lock = asyncio.Lock()
+        results: Dict[int, str] = {}
+
+        async def worker() -> None:
+            nonlocal cursor
+            while True:
+                async with cursor_lock:
+                    if cursor >= len(dir_jobs):
+                        return
+                    index, entry = dir_jobs[cursor]
+                    cursor += 1
+
                 try:
-                    abstract = await self.abstract(entry["uri"], ctx=ctx)
-                    return index, abstract
+                    abstract = await self._read_abstract_for_known_dir(entry["uri"], ctx=ctx)
                 except Exception:
-                    return index, "[.abstract.md is not ready]"
+                    abstract = "[.abstract.md is not ready]"
 
-        tasks = [fetch_abstract(i, entry) for i, entry in enumerate(entries)]
-        abstract_results = await asyncio.gather(*tasks)
-        for index, abstract in abstract_results:
+                results[index] = abstract
+
+        await asyncio.gather(*(worker() for _ in range(worker_count)))
+
+        for index, abstract in results.items():
             if len(abstract) > abs_limit:
                 abstract = abstract[: abs_limit - 3] + "..."
             entries[index]["abstract"] = abstract
@@ -1256,6 +1331,48 @@ class VikingFS:
 
     # ========== VikingFS Specific Capabilities ==========
 
+    async def _read_abstract_file(
+        self,
+        path: str,
+        uri: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> str:
+        """Read and decrypt/decode .abstract.md from a known directory path.
+
+        Does NOT perform stat or isDir check -- caller is responsible for
+        ensuring the path points to a directory.
+        """
+        file_path = f"{path}/.abstract.md"
+        try:
+            content_bytes = self._handle_agfs_read(await self._async_agfs.read(file_path))
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                mapped = map_exception(exc, resource=uri)
+                if mapped is not None:
+                    raise mapped from exc
+                raise
+            return f"# {uri} [Directory abstract is not ready]"
+
+        if self._encryptor:
+            real_ctx = self._ctx_or_default(ctx)
+            content_bytes = await self._encryptor.decrypt(real_ctx.account_id, content_bytes)
+
+        return self._decode_bytes(content_bytes)
+
+    async def _read_abstract_for_known_dir(
+        self,
+        uri: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> str:
+        """Read .abstract.md for a directory that is already known to be a directory.
+
+        Bypasses stat() and isDir check. Caller (i.e. _batch_fetch_abstracts)
+        must guarantee that the URI points to a directory.
+        """
+        self._ensure_access(uri, ctx)
+        path = self._uri_to_path(uri, ctx=ctx)
+        return await self._read_abstract_file(path, uri, ctx=ctx)
+
     async def abstract(
         self,
         uri: str,
@@ -1276,23 +1393,7 @@ class VikingFS:
                 f"{uri} is not a directory",
                 details={"resource": uri, "expected": "directory"},
             )
-        file_path = f"{path}/.abstract.md"
-        try:
-            content_bytes = self._handle_agfs_read(await self._async_agfs.read(file_path))
-        except Exception as exc:
-            if not is_not_found_error(exc):
-                mapped = map_exception(exc, resource=uri)
-                if mapped is not None:
-                    raise mapped from exc
-                raise
-            # Fallback to default if .abstract.md doesn't exist
-            return f"# {uri} [Directory abstract is not ready]"
-
-        if self._encryptor:
-            real_ctx = self._ctx_or_default(ctx)
-            content_bytes = await self._encryptor.decrypt(real_ctx.account_id, content_bytes)
-
-        return self._decode_bytes(content_bytes)
+        return await self._read_abstract_file(path, uri, ctx=ctx)
 
     async def overview(
         self,
@@ -2354,7 +2455,6 @@ class VikingFS:
                 all_entries.append(new_entry)
             elif show_all_hidden:
                 all_entries.append(new_entry)
-        # call abstract in parallel 6 threads
         await self._batch_fetch_abstracts(all_entries, abs_limit, ctx=ctx)
         return all_entries
 
@@ -2401,8 +2501,7 @@ class VikingFS:
         self._ensure_mutable_access(to_uri, ctx)
         from_path = self._uri_to_path(from_uri, ctx=ctx)
 
-        content_bytes = await self.read_file_bytes(from_uri, ctx=ctx)
-        await self.write_file(to_uri, content_bytes, ctx=ctx)
+        await self._copy_file_through_vikingfs(from_uri, to_uri, ctx=ctx)
         await self._async_agfs.rm(from_path)
 
     # ========== Temp File Operations (backward compatible) ==========

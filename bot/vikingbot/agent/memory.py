@@ -18,20 +18,6 @@ DEFAULT_USER_MEMORY_CHARS = 4000
 COVERAGE_USER_MEMORY_CHARS = 6000
 
 
-def _has_coverage_graph_debug(graph_debug: Any) -> bool:
-    if not isinstance(graph_debug, list):
-        return False
-    return any(
-        isinstance(entry, dict)
-        and (entry.get("coverage_mode") or entry.get("query_type") in COVERAGE_QUERY_TYPES)
-        for entry in graph_debug
-    )
-
-
-def _user_memory_char_budget(graph_debug: Any) -> int:
-    if _has_coverage_graph_debug(graph_debug):
-        return COVERAGE_USER_MEMORY_CHARS
-    return DEFAULT_USER_MEMORY_CHARS
 
 
 class MemoryStore:
@@ -42,6 +28,50 @@ class MemoryStore:
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.history_file = self.memory_dir / "HISTORY.md"
         self.latest_graph_retrieval_debug: list[dict[str, Any]] | None = None
+
+    @staticmethod
+    def _get_score(memory: Any) -> float:
+        raw_score = (
+            memory.get("score", 0) if isinstance(memory, dict) else getattr(memory, "score", 0.0)
+        )
+        try:
+            return float(raw_score)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @classmethod
+    def _limit_memory_groups(
+        cls,
+        result: dict[str, list[Any]],
+        limit: int,
+    ) -> dict[str, list[Any]]:
+        user_memories = result.get("user_memory", [])
+        agent_memories = result.get("agent_memory", [])
+        ranked: list[tuple[float, str, int, Any]] = []
+
+        for group, memories in (
+            ("user_memory", user_memories),
+            ("agent_memory", agent_memories),
+        ):
+            for index, memory in enumerate(memories):
+                ranked.append((cls._get_score(memory), group, index, memory))
+
+        selected = {
+            (group, index)
+            for _, group, index, _ in sorted(ranked, key=lambda item: item[0], reverse=True)[:limit]
+        }
+        return {
+            "user_memory": [
+                memory
+                for index, memory in enumerate(user_memories)
+                if ("user_memory", index) in selected
+            ],
+            "agent_memory": [
+                memory
+                for index, memory in enumerate(agent_memories)
+                if ("agent_memory", index) in selected
+            ],
+        }
 
     def read_long_term(self) -> str:
         if self.memory_file.exists():
@@ -132,14 +162,6 @@ class MemoryStore:
                 return -1.0
             return intent_signal
 
-        def is_coverage_graph_memory(m) -> bool:
-            metadata = get_debug_metadata(m)
-            return bool(metadata.get("coverage_mode")) or metadata.get("query_type") in {
-                "count",
-                "list_or_set",
-                "multi_hop",
-            }
-
         def graph_snippet_priority(m) -> tuple[float, float, float, float, float]:
             metadata = get_debug_metadata(m)
             snippet_score = metadata.get("snippet_score", {})
@@ -210,13 +232,11 @@ class MemoryStore:
                 logger.info(f"Using link-only for {uri} (read failed or empty)")
                 link_only_memories.append((uri, score))
 
-        coverage_graph_snippets = any(
-            is_coverage_graph_memory(memory) for memory in graph_snippet_memories
-        )
+
         graph_snippet_chars = 0
-        graph_snippet_budget = 3200 if coverage_graph_snippets else 800
-        graph_snippet_max_chars = 600 if coverage_graph_snippets else 360
-        graph_snippet_limit = 8 if coverage_graph_snippets else 3
+        graph_snippet_budget = 3200
+        graph_snippet_max_chars = 600
+        graph_snippet_limit = 8
         graph_snippet_count = 0
         for memory in graph_snippet_memories:
             if graph_snippet_count >= graph_snippet_limit:
@@ -288,12 +308,13 @@ class MemoryStore:
                 query=current_message,
                 user_ids=search_user_ids,
                 agent_user_id=admin_user_id,
-                limit=30,
+                limit=10,
             )
             if not result:
                 return ""
-            graph_debug = result.get("graph_retrieval_debug") if isinstance(result, dict) else None
-            self.latest_graph_retrieval_debug = graph_debug or None
+
+            result = self._limit_memory_groups(result, limit=10)
+
 
             # Log raw search results for debugging
             memory_list = []
@@ -314,7 +335,6 @@ class MemoryStore:
                 result["user_memory"],
                 client,
                 min_score=0.1,
-                max_chars=_user_memory_char_budget(graph_debug),
                 query_text=current_message,
             )
             agent_memory = await self._parse_viking_memory(
@@ -339,8 +359,9 @@ class MemoryStore:
         """用当前任务 query 检索 experience 记忆，注入到 system prompt。"""
         client = None
         try:
+            ov_cfg = load_config().ov_server
             client = await VikingClient.create(agent_id=workspace_id)
-            experiences = await client.search_experiences(query, limit=5)
+            experiences = await client.search_experiences(query, limit=ov_cfg.exp_recall_limit)
             logger.info(
                 f"[READ_EXPERIENCE_MEMORY]: found {len(experiences)} experiences, query={query[:50]}"
             )
@@ -351,7 +372,7 @@ class MemoryStore:
             if not experiences:
                 return ""
             return await self._parse_viking_memory(
-                experiences, client, min_score=0.3, max_chars=2000
+                experiences, client, min_score=0.3, max_chars=ov_cfg.exp_recall_max_chars
             )
         except Exception as e:
             logger.error(f"[READ_EXPERIENCE_MEMORY]: error. {e}")
