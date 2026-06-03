@@ -1553,7 +1553,6 @@ class VikingFS:
             memories=memories,
             resources=resources,
             skills=skills,
-            debug_metadata=result.debug_metadata,
         )
         telemetry.set("vector.returned", find_result.total)
         return find_result
@@ -1712,13 +1711,6 @@ class VikingFS:
             skills=skills,
             query_plan=query_plan,
             query_results=query_results,
-            debug_metadata={
-                "query_results": [
-                    qr.debug_metadata for qr in query_results if qr.debug_metadata
-                ]
-            }
-            if any(qr.debug_metadata for qr in query_results)
-            else {},
         )
         telemetry.set("vector.returned", find_result.total)
         return find_result

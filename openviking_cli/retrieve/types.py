@@ -289,7 +289,6 @@ class MatchedContext:
     category: str = ""
     score: float = 0.0
     match_reason: str = ""
-    debug_metadata: Dict[str, Any] = field(default_factory=dict)
 
     relations: List[RelatedContext] = field(default_factory=list)
 
@@ -310,7 +309,6 @@ class QueryResult:
     matched_contexts: List[MatchedContext]
     searched_directories: List[str]
     thinking_trace: ThinkingTrace = field(default_factory=ThinkingTrace)
-    debug_metadata: Dict[str, Any] = field(default_factory=dict)
 
     def get_trace_messages(self) -> List[str]:
         """Get trace as simple message list."""
@@ -337,7 +335,6 @@ class FindResult:
     query_plan: Optional[QueryPlan] = None
     query_results: Optional[List[QueryResult]] = None
     total: int = 0
-    debug_metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __iter__(self):
         """Make FindResult iterable by yielding all matched contexts."""
@@ -370,14 +367,12 @@ class FindResult:
 
         if include_provenance and self.query_results:
             result["provenance"] = [self._query_result_to_dict(qr) for qr in self.query_results]
-        if self.debug_metadata:
-            result["debug_metadata"] = self.debug_metadata
 
         return result
 
     def _context_to_dict(self, ctx: MatchedContext) -> Dict[str, Any]:
         """Convert MatchedContext to dict."""
-        result = {
+        return {
             "context_type": ctx.context_type.value,
             "uri": ctx.uri,
             "level": ctx.level,
@@ -388,9 +383,6 @@ class FindResult:
             "abstract": ctx.abstract,
             "overview": ctx.overview,
         }
-        if ctx.debug_metadata:
-            result["debug_metadata"] = ctx.debug_metadata
-        return result
 
     def _query_to_dict(self, q: TypedQuery) -> Dict[str, Any]:
         """Convert TypedQuery to dict."""
@@ -403,7 +395,7 @@ class FindResult:
 
     def _query_result_to_dict(self, qr: "QueryResult") -> Dict[str, Any]:
         """Convert QueryResult to dict with provenance data."""
-        result = {
+        return {
             "query": qr.query.query,
             "searched_directories": qr.searched_directories,
             "matched_contexts": [
@@ -418,9 +410,6 @@ class FindResult:
             ],
             "thinking_trace": qr.thinking_trace.to_dict(),
         }
-        if qr.debug_metadata:
-            result["debug_metadata"] = qr.debug_metadata
-        return result
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "FindResult":
@@ -436,7 +425,6 @@ class FindResult:
                 category=d.get("category", ""),
                 score=d.get("score", 0.0),
                 match_reason=d.get("match_reason", ""),
-                debug_metadata=d.get("debug_metadata", {}),
                 relations=[
                     RelatedContext(uri=r.get("uri", ""), abstract=r.get("abstract", ""))
                     for r in d.get("relations", [])
@@ -447,5 +435,4 @@ class FindResult:
             memories=[_parse_context(m) for m in data.get("memories", [])],
             resources=[_parse_context(r) for r in data.get("resources", [])],
             skills=[_parse_context(s) for s in data.get("skills", [])],
-            debug_metadata=data.get("debug_metadata", {}),
         )

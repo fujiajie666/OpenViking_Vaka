@@ -112,9 +112,6 @@ class SingleTurnChannel(BaseChannel):
                     "iteration": msg.iteration,
                     "tools_used_names": msg.tools_used_names,
                     "relevant_memories": (msg.metadata or {}).get("relevant_memories"),
-                    "graph_retrieval_debug": (msg.metadata or {}).get(
-                        "graph_retrieval_debug"
-                    ),
                 }
                 msg.content = json.dumps(output, ensure_ascii=False)
             self._last_response = msg.content

@@ -183,11 +183,6 @@ def test_graph_final_contexts_allow_more_auxiliary_for_coverage_queries():
             context_type=ContextType.MEMORY,
             score=0.9 - idx * 0.01,
             match_reason="Discovered via graph expansion",
-            debug_metadata={
-                "strategy": "mnemis_lite_v1",
-                "query_type": "list_or_set",
-                "coverage_mode": True,
-            },
         )
         for idx in range(9)
     ]
@@ -196,6 +191,7 @@ def test_graph_final_contexts_allow_more_auxiliary_for_coverage_queries():
         [*semantic, *graph],
         limit=2,
         graph_expanded=True,
+        coverage_graph_expanded=True,
     )
 
     assert [context.uri for context in selected[:2]] == [

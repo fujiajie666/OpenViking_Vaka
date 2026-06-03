@@ -219,7 +219,7 @@ class HierarchicalRetriever:
         )
 
         graph_expanded = False
-        graph_retrieval_debug: Dict[str, Any] = {}
+        coverage_graph_expanded = False
 
         logger.info(f"target_dirs: {target_dirs}, level: {level}, query={query.query}")
 
@@ -232,14 +232,19 @@ class HierarchicalRetriever:
                 target_dirs=target_dirs,
                 level=level,
                 query_text=query.query,
-                debug_out=graph_retrieval_debug,
             )
             graph_expanded = True
+            coverage_graph_expanded = self._has_coverage_graph_candidates(candidates)
 
         # Step 6: Convert results
         matched = await self._convert_to_matched_contexts(candidates, ctx=ctx)
 
-        final = self._select_final_contexts(matched, limit, graph_expanded=graph_expanded)
+        final = self._select_final_contexts(
+            matched,
+            limit,
+            graph_expanded=graph_expanded,
+            coverage_graph_expanded=coverage_graph_expanded,
+        )
 
         # Record retrieval stats for the observer.
         elapsed_ms = (time.monotonic() - t0) * 1000
@@ -255,9 +260,6 @@ class HierarchicalRetriever:
             query=query,
             matched_contexts=final,
             searched_directories=root_uris,
-            debug_metadata={"graph_retrieval": graph_retrieval_debug}
-            if graph_retrieval_debug
-            else {},
         )
 
     def _select_final_contexts(
@@ -266,6 +268,7 @@ class HierarchicalRetriever:
         limit: int,
         *,
         graph_expanded: bool,
+        coverage_graph_expanded: bool = False,
     ) -> List[MatchedContext]:
         """Return semantic top-k plus bounded auxiliary graph recalls.
 
@@ -278,18 +281,27 @@ class HierarchicalRetriever:
 
         semantic = [context for context in matched if not context.match_reason]
         graph = [context for context in matched if context.match_reason]
-        return semantic[:limit] + graph[: self._graph_auxiliary_result_limit(graph)]
+        return semantic[:limit] + graph[
+            : self._graph_auxiliary_result_limit(coverage_graph_expanded)
+        ]
 
     @classmethod
-    def _graph_auxiliary_result_limit(cls, graph: List[MatchedContext]) -> int:
+    def _graph_auxiliary_result_limit(cls, coverage_graph_expanded: bool) -> int:
         """Use extra graph evidence only for coverage-style queries."""
-        for context in graph:
-            metadata = context.debug_metadata or {}
-            if metadata.get("coverage_mode") is True:
-                return cls.GRAPH_COVERAGE_AUXILIARY_RESULT_LIMIT
-            if metadata.get("query_type") in cls.GRAPH_COVERAGE_QUERY_TYPES:
-                return cls.GRAPH_COVERAGE_AUXILIARY_RESULT_LIMIT
+        if coverage_graph_expanded:
+            return cls.GRAPH_COVERAGE_AUXILIARY_RESULT_LIMIT
         return cls.GRAPH_AUXILIARY_RESULT_LIMIT
+
+    @classmethod
+    def _has_coverage_graph_candidates(cls, candidates: List[Dict[str, Any]]) -> bool:
+        for candidate in candidates:
+            if not candidate.get("_from_graph"):
+                continue
+            if candidate.get("_mnemis_coverage_mode") is True:
+                return True
+            if candidate.get("_mnemis_query_type") in cls.GRAPH_COVERAGE_QUERY_TYPES:
+                return True
+        return False
 
     async def _global_vector_search(
         self,
@@ -603,7 +615,6 @@ class HierarchicalRetriever:
         target_dirs: Optional[List[str]] = None,
         level: Optional[List[int]] = None,
         query_text: Optional[str] = None,
-        debug_out: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Run graph-based expansion when link_enabled and graph_alpha > 0."""
         if not candidates:
@@ -640,7 +651,7 @@ class HierarchicalRetriever:
             from openviking.retrieve.graph.graph_retriever import GraphRetriever
 
             graph_retriever = GraphRetriever(index, self.retrieval_config)
-        expanded = await graph_retriever.expand(
+        return await graph_retriever.expand(
             candidates,
             ctx,
             limit,
@@ -648,9 +659,6 @@ class HierarchicalRetriever:
             level=level,
             query_text=query_text,
         )
-        if debug_out is not None:
-            debug_out.update(graph_retriever.debug_metadata)
-        return expanded
 
     def _get_graph_space_uris(
         self,
@@ -774,7 +782,6 @@ class HierarchicalRetriever:
                     category=c.get("category", ""),
                     score=final_score,
                     match_reason=match_reason,
-                    debug_metadata=c.get("_graph_debug", {}) if c.get("_from_graph") else {},
                     relations=relations,
                 )
             )

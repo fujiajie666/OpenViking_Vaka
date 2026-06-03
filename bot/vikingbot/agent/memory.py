@@ -27,7 +27,6 @@ class MemoryStore:
         self.memory_dir = ensure_dir(workspace / "memory")
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.history_file = self.memory_dir / "HISTORY.md"
-        self.latest_graph_retrieval_debug: list[dict[str, Any]] | None = None
 
     @staticmethod
     def _get_score(memory: Any) -> float:
@@ -118,16 +117,6 @@ class MemoryStore:
                 else getattr(m, "match_reason", "")
             )
 
-        def get_debug_metadata(m):
-            return (
-                m.get("debug_metadata", {})
-                if isinstance(m, dict)
-                else getattr(m, "debug_metadata", {})
-            ) or {}
-
-        def safe_float(value: Any) -> float:
-            return float(value) if isinstance(value, (int, float)) else 0.0
-
         normalized_query = (query_text or "").lower()
         recommendation_query = re.search(
             r"\b(recommendations?|advice|pointers?|tips|suggestions?)\b",
@@ -162,19 +151,23 @@ class MemoryStore:
                 return -1.0
             return intent_signal
 
-        def graph_snippet_priority(m) -> tuple[float, float, float, float, float]:
-            metadata = get_debug_metadata(m)
-            snippet_score = metadata.get("snippet_score", {})
-            if not isinstance(snippet_score, dict):
-                snippet_score = {}
-            return (
-                recommendation_direction_signal(m),
-                safe_float(snippet_score.get("overlap")),
-                safe_float(metadata.get("own_evidence")),
-                safe_float(metadata.get("total_evidence")),
-                safe_float(snippet_score.get("density")),
-                safe_float(get_score(m)),
-            )
+        def score_value(m) -> float:
+            try:
+                return float(get_score(m) or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        query_tokens = set(re.findall(r"[a-z0-9]+", normalized_query))
+
+        def snippet_query_score(m) -> tuple[int, float]:
+            abstract_tokens = set(re.findall(r"[a-z0-9]+", get_abstract(m).lower()))
+            overlap = len(query_tokens & abstract_tokens)
+            density = overlap / max(len(abstract_tokens), 1)
+            return overlap, density
+
+        def graph_snippet_priority(m) -> tuple[float, int, float, float]:
+            overlap, density = snippet_query_score(m)
+            return (recommendation_direction_signal(m), overlap, density, score_value(m))
 
         filtered_memories = [memory for memory in result if get_score(memory) >= min_score]
         filtered_memories.sort(key=get_score, reverse=True)
@@ -293,7 +286,6 @@ class MemoryStore:
         user_ids: list[str] | None = None,
     ) -> str:
         client = None
-        self.latest_graph_retrieval_debug = None
         try:
             config = load_config().ov_server
             admin_user_id = config.admin_user_id

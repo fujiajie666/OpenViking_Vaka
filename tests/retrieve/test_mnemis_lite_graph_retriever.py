@@ -138,7 +138,6 @@ def test_mnemis_lite_rejects_time_candidate_without_date_slot():
 
     assert by_uri["viking://direct"]["_graph_accepted"] is False
     assert "time_requires_date" in by_uri["viking://direct"]["_graph_accept_reason"]
-    assert by_uri["viking://direct"]["_graph_debug"]["strategy"] == "mnemis_lite_v1"
 
 
 def test_mnemis_lite_accepts_time_candidate_with_date_slot():

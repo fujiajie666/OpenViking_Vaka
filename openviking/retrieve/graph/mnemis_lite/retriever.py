@@ -53,13 +53,11 @@ class MnemisLiteGraphRetriever(GraphRetriever):
         query_text: str | None = None,
     ) -> List[Dict[str, Any]]:
         """Run semantic-preserving graph expansion with a second graph route."""
-        self._debug_metadata = {}
         plan = self._planner.plan(query_text)
         self._current_plan = plan
         try:
             seeds = self._build_seeds(candidates)
             if not seeds:
-                self._debug_metadata = self._build_retrieval_debug([], returned_uris=set())
                 return candidates
 
             ppr_engine = TypedWeightedPPR(
@@ -119,8 +117,7 @@ class MnemisLiteGraphRetriever(GraphRetriever):
                 query_text=query_text,
                 limit=limit,
             )
-            scored_candidates = expanded
-            expanded = self._filter_unaccepted_graph_nodes(scored_candidates)
+            expanded = self._filter_unaccepted_graph_nodes(expanded)
 
             if self._config.graph_path_count > 0:
                 try:
@@ -136,10 +133,6 @@ class MnemisLiteGraphRetriever(GraphRetriever):
                     )
 
             selected = self._select_expanded_candidates(expanded, limit=limit)
-            self._debug_metadata = self._build_retrieval_debug(
-                scored_candidates,
-                returned_uris={candidate.get("uri", "") for candidate in selected},
-            )
             return selected
         finally:
             self._current_plan = None
@@ -250,7 +243,6 @@ class MnemisLiteGraphRetriever(GraphRetriever):
             candidate["_mnemis_coverage_mode"] = plan.coverage_mode
             candidate["_mnemis_uri_kind"] = self._slot_scorer.uri_kind(candidate)
             if not candidate.get("_graph_accepted"):
-                candidate["_graph_debug"] = self._candidate_graph_debug(candidate)
                 continue
 
             slot = self._slot_scorer.slot_match(candidate, plan)
@@ -263,7 +255,6 @@ class MnemisLiteGraphRetriever(GraphRetriever):
                 candidate["_graph_accept_reason"] = f"rejected:{slot.reason}"
             else:
                 candidate["_graph_accept_reason"] = slot.reason
-            candidate["_graph_debug"] = self._candidate_graph_debug(candidate)
         return scored
 
     def _select_expanded_candidates(
@@ -331,41 +322,6 @@ class MnemisLiteGraphRetriever(GraphRetriever):
             float(candidate.get("_graph_query_evidence", 0.0) or 0.0),
             float(candidate.get("_graph_support", 0.0) or 0.0),
         )
-
-    def _build_retrieval_debug(
-        self,
-        candidates: List[Dict[str, Any]],
-        *,
-        returned_uris: set[str],
-    ) -> Dict[str, Any]:
-        records: List[Dict[str, Any]] = []
-        for candidate in candidates:
-            if not candidate.get("_from_graph"):
-                continue
-            record = dict(candidate.get("_graph_debug") or self._candidate_graph_debug(candidate))
-            record["returned"] = record.get("uri") in returned_uris
-            records.append(record)
-        plan = self._current_plan
-        return {
-            "strategy": _MNEMIS_LITE_STRATEGY,
-            "query_type": plan.query_type if plan else "",
-            "coverage_mode": bool(plan.coverage_mode) if plan else False,
-            "candidate_count": len(records),
-            "accepted_count": sum(1 for record in records if record.get("accepted")),
-            "returned_count": sum(1 for record in records if record.get("returned")),
-            "candidates": records,
-        }
-
-    def _candidate_graph_debug(self, candidate: Dict[str, Any]) -> Dict[str, Any]:
-        record = super()._candidate_graph_debug(candidate)
-        record["strategy"] = _MNEMIS_LITE_STRATEGY
-        record["query_type"] = str(candidate.get("_mnemis_query_type", "") or "")
-        record["coverage_mode"] = bool(candidate.get("_mnemis_coverage_mode", False))
-        record["route"] = str(candidate.get("_mnemis_route", "") or "")
-        record["slot_match"] = bool(candidate.get("_mnemis_slot_match", False))
-        record["slot_reason"] = str(candidate.get("_mnemis_slot_reason", "") or "")
-        record["coverage_group"] = str(candidate.get("_mnemis_coverage_group", "") or "")
-        return record
 
     def _ppr_route_support(
         self,
