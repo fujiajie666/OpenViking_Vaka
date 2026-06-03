@@ -13,11 +13,6 @@ from vikingbot.openviking_mount.ov_server import VikingClient
 from vikingbot.utils.helpers import ensure_dir
 
 
-COVERAGE_QUERY_TYPES = {"count", "list_or_set", "multi_hop"}
-DEFAULT_USER_MEMORY_CHARS = 4000
-COVERAGE_USER_MEMORY_CHARS = 6000
-
-
 
 
 class MemoryStore:
