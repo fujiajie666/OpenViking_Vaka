@@ -22,6 +22,23 @@ def format_int(value: int) -> str:
     return f"{value:,}"
 
 
+def parse_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "1", "yes", "y"}:
+        return True
+    if normalized in {"false", "0", "no", "n"}:
+        return False
+    return default
+
+
+def row_question_is_valid(row: dict) -> bool:
+    return parse_bool(row.get("is_question_valid"), default=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Statistics for judge result csv")
     parser.add_argument(
@@ -42,6 +59,7 @@ def main():
     total_completion_tokens = 0
     total_tokens = 0
     valid_rows = 0
+    skipped_question_invalid_rows = 0
     total_iteration = 0
 
     valid_only_correct = 0
@@ -60,23 +78,27 @@ def main():
             if category == "5":
                 continue
 
+            if not row_question_is_valid(row):
+                skipped_question_invalid_rows += 1
+                continue
+
             valid_rows += 1
 
             is_invalid = row.get("is_invalid", "").lower() == "true"
-            is_valid = not is_invalid
+            is_not_invalid = not is_invalid
 
             result = row.get("result", "").strip().upper()
             if result == "CORRECT":
                 correct += 1
-                if is_valid:
+                if is_not_invalid:
                     valid_only_correct += 1
             elif result == "WRONG":
                 wrong += 1
-                if is_valid:
+                if is_not_invalid:
                     valid_only_wrong += 1
 
             total_iteration += int(row.get("iteration", "0"))
-            if is_valid:
+            if is_not_invalid:
                 valid_only_total_iteration += int(row.get("iteration", "0"))
 
             time_cost = row.get("time_cost", "")
@@ -84,7 +106,7 @@ def main():
                 try:
                     time_val = float(time_cost)
                     total_time += time_val
-                    if is_valid:
+                    if is_not_invalid:
                         valid_only_total_time += time_val
                 except (ValueError, TypeError):
                     pass
@@ -97,14 +119,14 @@ def main():
                     total_completion_tokens += token_data.get("completion_tokens", 0)
                     total_tokens += token_data.get("total_tokens", 0)
 
-                    if is_valid:
+                    if is_not_invalid:
                         valid_only_total_prompt_tokens += token_data.get("prompt_tokens", 0)
                         valid_only_total_completion_tokens += token_data.get("completion_tokens", 0)
                         valid_only_total_tokens += token_data.get("total_tokens", 0)
                 except json.JSONDecodeError:
                     pass
 
-            if is_valid:
+            if is_not_invalid:
                 valid_only_rows += 1
 
     total_graded = correct + wrong
@@ -133,6 +155,7 @@ def main():
 
     all_rows = [
         ("Total rows", format_int(valid_rows)),
+        ("Skipped question-invalid rows", format_int(skipped_question_invalid_rows)),
         ("Graded rows", format_int(total_graded)),
         ("Correct", format_int(correct)),
         ("Wrong", format_int(wrong)),
@@ -167,9 +190,15 @@ def main():
     ]
 
     output_lines = [
-        *make_table("=== Judge Result Statistics (excluding category=5) ===", all_rows),
+        *make_table(
+            "=== Judge Result Statistics (excluding category=5 and is_question_valid=false) ===",
+            all_rows,
+        ),
         "",
-        *make_table("=== Valid Questions Only (is_valid=True, excluding category=5) ===", valid_rows_table),
+        *make_table(
+            "=== Valid Questions Only (is_invalid=False, excluding category=5 and is_question_valid=false) ===",
+            valid_rows_table,
+        ),
     ]
 
     for line in output_lines:

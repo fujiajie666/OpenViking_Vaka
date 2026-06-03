@@ -20,6 +20,23 @@ MEMORY_FIELD_HINTS = (
 GRAPH_RETRIEVAL_DEBUG_KEY = "graph_retrieval_debug"
 
 
+def parse_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "1", "yes", "y"}:
+        return True
+    if normalized in {"false", "0", "no", "n"}:
+        return False
+    return default
+
+
+def row_question_is_valid(row: dict) -> bool:
+    return parse_bool(row.get("is_question_valid"), default=True)
+
+
 def _contains_memory_signal(value) -> bool:
     """Return whether a JSON value looks like retrieved memory/debug payload."""
     if isinstance(value, str):
@@ -234,6 +251,7 @@ def load_csv_qa(
     with open(input_path, "r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
+            is_question_valid = row_question_is_valid(row)
             qa_list.append(
                 {
                     "sample_id": row.get("sample_id", ""),
@@ -242,6 +260,7 @@ def load_csv_qa(
                     "category": "",
                     "evidence": [],
                     "question_time": default_time,
+                    "is_question_valid": is_question_valid,
                 }
             )
 
@@ -319,6 +338,7 @@ def load_locomo_qa(
             qa = qa_items[question_index]
             evidence_list = qa.get("evidence", [])
             question_id = f"{sample_id}_qa{question_index}"
+            is_question_valid = parse_bool(qa.get("is_question_valid"), default=True)
             qa_list.append(
                 {
                     "sample_id": sample_id,
@@ -335,12 +355,14 @@ def load_locomo_qa(
                     "is_invalid": qa["question"] in invalid_questions
                     if invalid_questions
                     else False,
+                    "is_question_valid": is_question_valid,
                 }
             )
         else:
             for q_idx, qa in enumerate(qa_items):
                 evidence_list = qa.get("evidence", [])
                 question_id = f"{sample_id}_qa{q_idx}"
+                is_question_valid = parse_bool(qa.get("is_question_valid"), default=True)
                 qa_list.append(
                     {
                         "sample_id": sample_id,
@@ -357,6 +379,7 @@ def load_locomo_qa(
                         "is_invalid": qa["question"] in invalid_questions
                         if invalid_questions
                         else False,
+                        "is_question_valid": is_question_valid,
                     }
                 )
 
@@ -599,6 +622,8 @@ def main():
             for row in reader:
                 if row.get("is_invalid", "").lower() == "true":
                     continue
+                if not row_question_is_valid(row):
+                    continue
                 if row.get("result") == "WRONG":
                     sample_id = row.get("sample_id", "")
                     question_index = row.get("question_index", "")
@@ -615,7 +640,7 @@ def main():
         if retry_wrong_samples:
             print(f"[retry-wrong] Affected samples: {', '.join(sorted(retry_wrong_samples))}")
 
-    # 加载QA数据（所有题目，包括无效题目，只标记 is_invalid）
+    # 加载QA数据（原有 is_invalid 逻辑保留，题目有效性由 is_question_valid 单独标记）
     qa_list = load_locomo_qa(
         args.input,
         args.sample,
@@ -640,6 +665,14 @@ def main():
     qa_list = [qa for qa in qa_list if str(qa.get("category")) != "5"]
     print(f"Filtered to {len(qa_list)} questions after removing category=5")
 
+    before_question_valid_filter = len(qa_list)
+    qa_list = [qa for qa in qa_list if qa.get("is_question_valid", True)]
+    skipped_question_invalid = before_question_valid_filter - len(qa_list)
+    print(
+        f"Filtered to {len(qa_list)} questions after removing "
+        f"{skipped_question_invalid} question-invalid questions"
+    )
+
     # 加载已处理的问题
     processed_questions = load_processed_questions(args.output, skip_done=args.skip_done)
     remaining = total - len(processed_questions)
@@ -652,6 +685,7 @@ def main():
         "question_index",
         "result",
         "is_invalid",
+        "is_question_valid",
         "question",
         "answer",
         "category",
@@ -717,6 +751,8 @@ def main():
             "sample_id": qa_item["sample_id"],
             "question_index": qa_item.get("question_index", ""),
             "result": "",
+            "is_invalid": qa_item.get("is_invalid", False),
+            "is_question_valid": qa_item.get("is_question_valid", True),
             "question": question,
             "answer": answer,
             "category": qa_item.get("category", ""),
@@ -737,7 +773,6 @@ def main():
             "graph_retrieval_debug_json": format_graph_retrieval_debug_for_csv(
                 retrieved_memory_info.get("graph_retrieval_debug")
             ),
-            "is_invalid": qa_item.get("is_invalid", False),
         }
 
         # 线程安全的结果收集

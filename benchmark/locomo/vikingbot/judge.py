@@ -12,6 +12,23 @@ env_file = Path.home() / ".openviking_benchmark_env"
 load_dotenv(env_file)
 
 
+def parse_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "1", "yes", "y"}:
+        return True
+    if normalized in {"false", "0", "no", "n"}:
+        return False
+    return default
+
+
+def row_question_is_valid(row: dict) -> bool:
+    return parse_bool(row.get("is_question_valid"), default=True)
+
+
 async def grade_answer(
     llm_client, model: str, question: str, gold_answer: str, response: str
 ) -> tuple[bool, str]:
@@ -126,12 +143,30 @@ async def main():
     # 加载数据
     rows, fieldnames = load_answers(args.input)
     total = len(rows)
-    # 筛选未评分的行
-    ungraded = [i for i, row in enumerate(rows) if not row.get("result")]
-    print(f"Total answers: {total}, ungraded: {len(ungraded)}")
+    question_valid_rows = [row for row in rows if row_question_is_valid(row)]
+    skipped_question_invalid = total - len(question_valid_rows)
+    # 筛选题目有效且未评分的行
+    ungraded = [
+        i
+        for i, row in enumerate(rows)
+        if row_question_is_valid(row) and not row.get("result")
+    ]
+    print(
+        f"Total answers: {total}, question-valid: {len(question_valid_rows)}, "
+        f"skipped question-invalid: {skipped_question_invalid}, "
+        f"ungraded question-valid: {len(ungraded)}"
+    )
 
     if not ungraded:
-        print("All answers already graded, exit")
+        correct = sum(1 for row in question_valid_rows if row.get("result") == "CORRECT")
+        total_graded = sum(
+            1
+            for row in question_valid_rows
+            if row.get("result", "").strip().upper() in {"CORRECT", "WRONG"}
+        )
+        accuracy = correct / total_graded if total_graded > 0 else 0.0
+        print("All question-valid answers already graded, exit")
+        print(f"Grading completed: {correct}/{total_graded} correct, accuracy: {accuracy:.2%}")
         return
 
     # 初始化OpenAI客户端
@@ -172,8 +207,13 @@ async def main():
     await asyncio.gather(*tasks)
 
     # 统计结果
-    correct = sum(1 for row in rows if row.get("result") == "CORRECT")
-    total_graded = sum(1 for row in rows if row.get("result"))
+    question_valid_rows = [row for row in rows if row_question_is_valid(row)]
+    correct = sum(1 for row in question_valid_rows if row.get("result") == "CORRECT")
+    total_graded = sum(
+        1
+        for row in question_valid_rows
+        if row.get("result", "").strip().upper() in {"CORRECT", "WRONG"}
+    )
     accuracy = correct / total_graded if total_graded > 0 else 0.0
     print(f"\nGrading completed: {correct}/{total_graded} correct, accuracy: {accuracy:.2%}")
     print(f"All results saved to {args.input}")
