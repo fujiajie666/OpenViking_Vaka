@@ -33,12 +33,19 @@ for arg in "$@"; do
 done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+RESULT_DIR="$SCRIPT_DIR/result"
+mkdir -p "$RESULT_DIR"
+export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+
 SKIP_IMPORT=false
 GROUP_CHAT=false
 AUTO_COMMIT=false
 RETRY_WRONG=""
 
-if command -v python3 >/dev/null 2>&1; then
+if [ -x "$REPO_ROOT/.venv/bin/python" ]; then
+    PYTHON_BIN="$REPO_ROOT/.venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
     PYTHON_BIN="python3"
 elif command -v python >/dev/null 2>&1; then
     PYTHON_BIN="python"
@@ -156,17 +163,17 @@ export SCRIPT_DIR INPUT_FILE RETRY_WRONG ACCOUNT OPENVIKING_URL GROUP_CHAT
 
 # auto-commit 逻辑
 if [ "$AUTO_COMMIT" = "true" ]; then
-    if [ -n "$(git status --porcelain)" ]; then
+    if [ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]; then
         echo "[auto-commit] 检测到未提交变更，正在提交..."
-        git add -A
-        git commit -m "auto-commit before eval $(date +%Y%m%d_%H%M%S)"
+        git -C "$REPO_ROOT" add -A
+        git -C "$REPO_ROOT" commit -m "auto-commit before eval $(date +%Y%m%d_%H%M%S)"
     else
         echo "[auto-commit] 工作区干净，无需提交"
     fi
 fi
-GIT_COMMIT_ID=$(git rev-parse --short HEAD)
+GIT_COMMIT_ID=$(git -C "$REPO_ROOT" rev-parse --short HEAD)
 TIMESTAMP=$(date +%Y%m%d%H%M%S)
-IMPORT_SUCCESS_CSV="./result/import_success.csv"
+IMPORT_SUCCESS_CSV="$RESULT_DIR/import_success.csv"
 IMPORT_ROW_START=0
 IMPORT_PERFORMED=false
 
@@ -298,9 +305,9 @@ if [ -n "$RETRY_WRONG" ]; then
     echo "源文件: $RETRY_WRONG"
 
     if [ "$AUTO_COMMIT" = "true" ]; then
-        RESULT_FILE="./result/locomo_retry_${TIMESTAMP}_${GIT_COMMIT_ID}.csv"
+        RESULT_FILE="$RESULT_DIR/locomo_retry_${TIMESTAMP}_${GIT_COMMIT_ID}.csv"
     else
-        RESULT_FILE="./result/locomo_retry_${TIMESTAMP}.csv"
+        RESULT_FILE="$RESULT_DIR/locomo_retry_${TIMESTAMP}.csv"
     fi
 
     # 从错题 CSV 中提取需要导入的对话（复用 import_to_ov.py 的并行逻辑）
@@ -315,9 +322,8 @@ if [ -n "$RETRY_WRONG" ]; then
         "${COMMON_OPTS[@]}"
     IMPORT_PERFORMED=true
 
-        echo "等待数据处理完成..."
-        sleep 30
-    fi
+    echo "等待数据处理完成..."
+    sleep 30
 
     # 评估错题
     echo "[2/3] 重新评估错题..."
@@ -348,9 +354,9 @@ if [ -z "$SAMPLE" ]; then
     echo "=== 全量评测模式 ==="
 
     if [ "$AUTO_COMMIT" = "true" ]; then
-        RESULT_FILE="./result/locomo_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv"
+        RESULT_FILE="$RESULT_DIR/locomo_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv"
     else
-        RESULT_FILE="./result/locomo_result_${TIMESTAMP}.csv"
+        RESULT_FILE="$RESULT_DIR/locomo_result_${TIMESTAMP}.csv"
     fi
 
     # 导入数据
@@ -449,9 +455,9 @@ if [ -n "$QUESTION_INDEX" ]; then
         echo "[2/3] Running evaluation..."
     fi
     if [ "$AUTO_COMMIT" = "true" ]; then
-        OUTPUT_FILE=./result/locomo_${SAMPLE}_${QUESTION_INDEX}_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv
+        OUTPUT_FILE="$RESULT_DIR/locomo_${SAMPLE}_${QUESTION_INDEX}_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv"
     else
-        OUTPUT_FILE=./result/locomo_${SAMPLE}_${QUESTION_INDEX}_result_${TIMESTAMP}.csv
+        OUTPUT_FILE="$RESULT_DIR/locomo_${SAMPLE}_${QUESTION_INDEX}_result_${TIMESTAMP}.csv"
     fi
     "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" \
         "$INPUT_FILE" \
@@ -553,9 +559,9 @@ PY
         echo "[2/4] Running evaluation for all questions..."
     fi
     if [ "$AUTO_COMMIT" = "true" ]; then
-        OUTPUT_FILE=./result/locomo_${SAMPLE}_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv
+        OUTPUT_FILE="$RESULT_DIR/locomo_${SAMPLE}_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv"
     else
-        OUTPUT_FILE=./result/locomo_${SAMPLE}_result_${TIMESTAMP}.csv
+        OUTPUT_FILE="$RESULT_DIR/locomo_${SAMPLE}_result_${TIMESTAMP}.csv"
     fi
     "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" \
         "$INPUT_FILE" \
