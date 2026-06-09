@@ -99,3 +99,34 @@ async def test_long_memory_falls_back_to_evidence_snippet_instead_of_link_only(t
     assert 'type="evidence_snippet"' in packed
     assert "London" in packed
     assert 'type="link"' not in packed
+
+
+@pytest.mark.asyncio
+async def test_graph_snippet_prioritizes_query_overlap_before_score(tmp_path: Path):
+    store = MemoryStore(tmp_path)
+
+    packed = await store._parse_viking_memory(
+        [
+            {
+                "uri": "viking://user/conv-43/memories/recommendation.md",
+                "score": 0.2,
+                "abstract": "Tim recommended The Name of the Wind to Sarah.",
+                "match_reason": "Discovered via graph expansion",
+            },
+            {
+                "uri": "viking://user/conv-43/memories/travel.md",
+                "score": 0.9,
+                "abstract": "Tim visited London during a summer trip.",
+                "match_reason": "Discovered via graph expansion",
+            },
+        ],
+        FakeClient({}),
+        min_score=0.1,
+        query_text="Did Tim tell Sarah about The Name of the Wind?",
+    )
+
+    recommendation_index = packed.index("The Name of the Wind")
+    travel_index = packed.index("visited London")
+
+    assert recommendation_index < travel_index
+    assert packed.count('type="graph_snippet"') == 2

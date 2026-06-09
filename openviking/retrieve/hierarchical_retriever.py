@@ -299,9 +299,9 @@ class HierarchicalRetriever:
         for candidate in candidates:
             if not candidate.get("_from_graph"):
                 continue
-            if candidate.get("_mnemis_coverage_mode") is True:
+            if candidate.get("_graph_coverage_mode") is True:
                 return True
-            if candidate.get("_mnemis_query_type") in cls.GRAPH_COVERAGE_QUERY_TYPES:
+            if candidate.get("_graph_query_type") in cls.GRAPH_COVERAGE_QUERY_TYPES:
                 return True
         return False
 

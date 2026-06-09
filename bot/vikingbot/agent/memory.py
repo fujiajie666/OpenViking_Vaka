@@ -229,38 +229,6 @@ class MemoryStore:
             )
 
         normalized_query = (query_text or "").lower()
-        recommendation_query = re.search(
-            r"\b(recommendations?|advice|pointers?|tips|suggestions?)\b",
-            normalized_query,
-        )
-        giver_match = re.search(r"\bfrom\s+([a-z][a-z0-9_-]*)", normalized_query)
-        recipient_match = re.search(
-            r"\b(?:has|have)\s+([a-z][a-z0-9_-]*)\s+received\b",
-            normalized_query,
-        )
-        recommendation_terms = r"recommend\w*|advi[cs]\w*|pointer\w*|tip\w*|suggest\w*|shared?|provided|told"
-        giver = giver_match.group(1) if giver_match else ""
-        recipient = recipient_match.group(1) if recipient_match else ""
-
-        def recommendation_direction_signal(m) -> float:
-            if not recommendation_query:
-                return 0.0
-            text = f"{get_uri(m)} {get_abstract(m)}".lower()
-            intent_signal = 1.0 if re.search(recommendation_terms, text) else 0.0
-            if not giver or not recipient:
-                return intent_signal
-            giver_action = re.search(rf"\b{re.escape(giver)}\b.*\b(?:{recommendation_terms})\b", text)
-            recipient_action = re.search(
-                rf"\b{re.escape(recipient)}\b.*\b(?:{recommendation_terms})\b",
-                text,
-            )
-            recipient_present = re.search(rf"\b{re.escape(recipient)}\b", text)
-            giver_present = re.search(rf"\b{re.escape(giver)}\b", text)
-            if giver_action and recipient_present:
-                return 3.0
-            if recipient_action and giver_present:
-                return -1.0
-            return intent_signal
 
         def score_value(m) -> float:
             try:
@@ -268,17 +236,17 @@ class MemoryStore:
             except (TypeError, ValueError):
                 return 0.0
 
-        query_tokens = set(re.findall(r"[a-z0-9]+", normalized_query))
+        query_tokens = self._tokens(normalized_query)
 
         def snippet_query_score(m) -> tuple[int, float]:
-            abstract_tokens = set(re.findall(r"[a-z0-9]+", get_abstract(m).lower()))
+            abstract_tokens = self._tokens(get_abstract(m))
             overlap = len(query_tokens & abstract_tokens)
             density = overlap / max(len(abstract_tokens), 1)
             return overlap, density
 
-        def graph_snippet_priority(m) -> tuple[float, int, float, float]:
+        def graph_snippet_priority(m) -> tuple[int, float, float]:
             overlap, density = snippet_query_score(m)
-            return (recommendation_direction_signal(m), overlap, density, score_value(m))
+            return (overlap, density, score_value(m))
 
         filtered_memories = [memory for memory in result if get_score(memory) >= min_score]
         filtered_memories.sort(key=get_score, reverse=True)

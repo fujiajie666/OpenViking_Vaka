@@ -586,10 +586,10 @@ def main():
     parser.add_argument(
         "--disable-tool",
         action="append",
-        default=["web_search", "web_fetch"],
+        default=["web_search", "web_fetch", "openviking_memory_commit"],
         help=(
             "Disable a vikingbot tool during evaluation. Can be repeated. "
-            "Default: web_search, web_fetch"
+            "Default: web_search, web_fetch, openviking_memory_commit"
         ),
     )
     args = parser.parse_args()

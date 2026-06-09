@@ -263,8 +263,8 @@ def test_mnemis_lite_adds_ppr_only_graph_route_candidate():
 
     assert "viking://direct" in by_uri
     assert "viking://ppr_only" in by_uri
-    assert by_uri["viking://direct"]["_mnemis_route"] == "direct"
-    assert by_uri["viking://ppr_only"]["_mnemis_route"] == "ppr_or_two_hop"
+    assert by_uri["viking://direct"]["_graph_route"] == "direct"
+    assert by_uri["viking://ppr_only"]["_graph_route"] == "ppr_or_two_hop"
 
 
 def test_mnemis_lite_overfetches_when_direct_nodes_fill_rank_window():
@@ -303,7 +303,7 @@ def test_mnemis_lite_overfetches_when_direct_nodes_fill_rank_window():
     by_uri = {candidate["uri"]: candidate for candidate in merged}
 
     assert "viking://ppr_only" in by_uri
-    assert by_uri["viking://ppr_only"]["_mnemis_route"] == "ppr_or_two_hop"
+    assert by_uri["viking://ppr_only"]["_graph_route"] == "ppr_or_two_hop"
 
 
 def test_mnemis_lite_coverage_selection_diversifies_graph_groups():
@@ -320,19 +320,19 @@ def test_mnemis_lite_coverage_selection_diversifies_graph_groups():
             "uri": "viking://graph_a",
             "_final_score": 0.9,
             "_from_graph": True,
-            "_mnemis_coverage_group": "same",
+            "_graph_coverage_group": "same",
         },
         {
             "uri": "viking://graph_b",
             "_final_score": 0.8,
             "_from_graph": True,
-            "_mnemis_coverage_group": "same",
+            "_graph_coverage_group": "same",
         },
         {
             "uri": "viking://graph_c",
             "_final_score": 0.7,
             "_from_graph": True,
-            "_mnemis_coverage_group": "different",
+            "_graph_coverage_group": "different",
         },
     ]
 
@@ -359,15 +359,15 @@ def test_mnemis_lite_selection_keeps_direct_route_before_ppr_route():
             "uri": "viking://ppr",
             "_final_score": 0.95,
             "_from_graph": True,
-            "_mnemis_route": "ppr_or_two_hop",
-            "_mnemis_coverage_group": "ppr",
+            "_graph_route": "ppr_or_two_hop",
+            "_graph_coverage_group": "ppr",
         },
         {
             "uri": "viking://direct",
             "_final_score": 0.5,
             "_from_graph": True,
-            "_mnemis_route": "direct",
-            "_mnemis_coverage_group": "direct",
+            "_graph_route": "direct",
+            "_graph_coverage_group": "direct",
         },
     ]
 

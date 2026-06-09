@@ -722,7 +722,7 @@ class EvidenceGraphRetriever:
             semantic_score = self._candidate_semantic_score(candidate)
             candidate["_graph_strategy"] = _EVIDENCE_GRAPH_STRATEGY
             candidate["_evidence_query_plan"] = self._debug_plan(plan)
-            candidate["_mnemis_coverage_mode"] = plan.coverage_mode
+            candidate["_graph_coverage_mode"] = plan.coverage_mode
             if not candidate.get("_from_graph"):
                 candidate["_final_score"] = semantic_score
                 candidate["_graph_accepted"] = False

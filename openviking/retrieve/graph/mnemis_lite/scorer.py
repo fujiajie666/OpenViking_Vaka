@@ -72,7 +72,7 @@ class MnemisLiteSlotScorer:
         content_text = self._candidate_content_text(candidate)
         content_match_text = self._candidate_match_text(candidate, include_uri=False)
         all_match_text = self._candidate_match_text(candidate, include_uri=True)
-        uri_kind = str(candidate.get("_mnemis_uri_kind") or candidate.get("_uri_kind") or "")
+        uri_kind = str(candidate.get("_graph_uri_kind") or candidate.get("_uri_kind") or "")
         if not uri_kind:
             uri_kind = self.uri_kind(candidate)
 

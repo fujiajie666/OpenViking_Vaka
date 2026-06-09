@@ -9,7 +9,7 @@ from vikingbot.bus.events import InboundMessage, OutboundEventType
 from vikingbot.bus.queue import MessageBus
 from vikingbot.config.schema import Config, SessionKey
 from vikingbot.heartbeat.service import HEARTBEAT_METADATA_KEY
-from vikingbot.providers.base import LLMProvider, LLMResponse
+from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 
 class _FakeProvider(LLMProvider):
@@ -840,7 +840,9 @@ async def test_agent_loop_emits_normalized_response_completed_payload(temp_dir: 
 
 
 @pytest.mark.asyncio
-async def test_agent_loop_eval_mode_disables_memory_commit_tool(temp_dir: Path, monkeypatch):
+async def test_agent_loop_passes_request_disabled_tools_without_eval_injection(
+    temp_dir: Path, monkeypatch
+):
     monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
     monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
     monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
@@ -880,7 +882,69 @@ async def test_agent_loop_eval_mode_disables_memory_commit_tool(temp_dir: Path, 
     )
 
     assert response is not None
-    assert captured["disabled_tools"] == ["read_file", "openviking_memory_commit"]
+    assert captured["disabled_tools"] == ["read_file"]
+
+
+class _DisabledToolProvider(LLMProvider):
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    async def chat(self, *args, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCallRequest(
+                        id="tool-call-1",
+                        name="read_file",
+                        arguments={"path": "notes.txt"},
+                        tokens=3,
+                    )
+                ],
+            )
+        return LLMResponse(content="final answer")
+
+    def get_default_model(self) -> str:
+        return "fake-model"
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_disabled_tool_guard_returns_recoverable_error(
+    temp_dir: Path, monkeypatch
+):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    provider = _DisabledToolProvider()
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=temp_dir / "workspace",
+        config=Config(storage_workspace=str(temp_dir)),
+    )
+
+    async def fail_execute(*args, **kwargs):
+        raise AssertionError("disabled tool should not reach ToolRegistry.execute")
+
+    loop.tools.execute = fail_execute
+
+    final_content, _reasoning, tools_used, _token_usage, _iteration = await loop._run_agent_loop(
+        messages=[{"role": "user", "content": "please answer"}],
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="session-1"),
+        publish_events=False,
+        disabled_tools=["read_file"],
+    )
+
+    assert final_content == "final answer"
+    assert len(tools_used) == 1
+    assert tools_used[0]["tool_name"] == "read_file"
+    assert tools_used[0]["result"].startswith(
+        "Error: Tool 'read_file' is disabled for this request."
+    )
+    assert tools_used[0]["execute_success"] is False
 
 
 @pytest.mark.asyncio

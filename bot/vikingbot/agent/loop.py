@@ -41,8 +41,6 @@ from vikingbot.session.manager import Session, SessionManager
 from vikingbot.utils.helpers import cal_str_tokens, ensure_non_empty_assistant_content
 from vikingbot.utils.tracing import set_response_id, trace
 
-EVAL_DISABLED_TOOLS = ("openviking_memory_commit",)
-
 if TYPE_CHECKING:
     from vikingbot.config.schema import ExecToolConfig
     from vikingbot.cron.service import CronService
@@ -273,21 +271,6 @@ class AgentLoop:
             subagent_manager=self.subagents,
             cron_service=self.cron_service,
         )
-
-    @staticmethod
-    def _normalize_disabled_tools(disabled_tools: Any, eval_mode: bool) -> list[str]:
-        """Return request-scoped disabled tools, adding eval-only write guards."""
-        if isinstance(disabled_tools, list):
-            normalized = [tool for tool in disabled_tools if isinstance(tool, str)]
-        else:
-            normalized = []
-
-        if eval_mode:
-            for tool in EVAL_DISABLED_TOOLS:
-                if tool not in normalized:
-                    normalized.append(tool)
-
-        return normalized
 
     def _ov_session_context_enabled(self) -> bool:
         agents_config = getattr(self.config, "agents", None)
@@ -703,7 +686,10 @@ class AgentLoop:
                         return (
                             idx,
                             tool_call,
-                            f"Error: Tool '{tool_call.name}' is disabled for this request",
+                            (
+                                f"Error: Tool '{tool_call.name}' is disabled for this request. "
+                                "Use another available tool or answer directly."
+                            ),
                             duration,
                         )
 
@@ -755,9 +741,8 @@ class AgentLoop:
                         "args": args_str,
                         "result": result,
                         "duration": tool_execute_duration,
-                        "execute_success": True
-                        if result and "Error executing" not in result
-                        else False,
+                        "execute_success": result is not None
+                        and not (isinstance(result, str) and result.startswith("Error")),
                         "input_token": tool_call.tokens,
                         "output_token": cal_str_tokens(result, text_type="mixed"),
                     }
@@ -846,10 +831,9 @@ class AgentLoop:
             session = self.sessions.get_or_create(session_key, skip_heartbeat=skip_heartbeat)
 
             ov_tools_enable = self._get_ov_tools_enable(session_key)
-            disabled_tools = self._normalize_disabled_tools(
-                msg.metadata.get("disabled_tools", []) if msg.metadata else [],
-                eval_mode=self._eval,
-            )
+            disabled_tools = msg.metadata.get("disabled_tools", []) if msg.metadata else []
+            if not isinstance(disabled_tools, list):
+                disabled_tools = []
             # Get profile_user_list from channel config
             profile_user_list = []
             # Try to get memory_users from message metadata first (CLI mode), then from channel config

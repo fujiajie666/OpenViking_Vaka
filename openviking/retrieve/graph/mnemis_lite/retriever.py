@@ -163,7 +163,7 @@ class MnemisLiteGraphRetriever(GraphRetriever):
         }
         for candidate in existing_by_uri.values():
             if candidate.get("_from_graph"):
-                candidate["_mnemis_route"] = "direct"
+                candidate["_graph_route"] = "direct"
 
         norm_support = minmax_normalize(support_scores)
         target_prefixes = self._normalize_target_dirs(target_dirs)
@@ -183,7 +183,7 @@ class MnemisLiteGraphRetriever(GraphRetriever):
                 continue
             node = self._graph_index.get_node(uri)
             candidate = self._new_graph_candidate(uri, node, ppr_scores)
-            candidate["_mnemis_route"] = "ppr_or_two_hop"
+            candidate["_graph_route"] = "ppr_or_two_hop"
             self._attach_graph_signal_metadata(
                 candidate,
                 support_scores=support_scores,
@@ -239,16 +239,16 @@ class MnemisLiteGraphRetriever(GraphRetriever):
             if not candidate.get("_from_graph"):
                 continue
             candidate["_graph_strategy"] = _MNEMIS_LITE_STRATEGY
-            candidate["_mnemis_query_type"] = plan.query_type
-            candidate["_mnemis_coverage_mode"] = plan.coverage_mode
-            candidate["_mnemis_uri_kind"] = self._slot_scorer.uri_kind(candidate)
+            candidate["_graph_query_type"] = plan.query_type
+            candidate["_graph_coverage_mode"] = plan.coverage_mode
+            candidate["_graph_uri_kind"] = self._slot_scorer.uri_kind(candidate)
             if not candidate.get("_graph_accepted"):
                 continue
 
             slot = self._slot_scorer.slot_match(candidate, plan)
-            candidate["_mnemis_slot_match"] = slot.matched
-            candidate["_mnemis_slot_reason"] = slot.reason
-            candidate["_mnemis_coverage_group"] = self._slot_scorer.coverage_group(candidate)
+            candidate["_graph_slot_match"] = slot.matched
+            candidate["_graph_slot_reason"] = slot.reason
+            candidate["_graph_coverage_group"] = self._slot_scorer.coverage_group(candidate)
             if not slot.matched:
                 candidate["_graph_accepted"] = False
                 candidate["_graph_boost"] = 0.0
@@ -284,7 +284,7 @@ class MnemisLiteGraphRetriever(GraphRetriever):
         graph_limit = max(0, min(len(graph_candidates), self._config.graph_expansion_topk))
         for candidate in graph_candidates:
             group = str(
-                candidate.get("_mnemis_coverage_group")
+                candidate.get("_graph_coverage_group")
                 or self._slot_scorer.coverage_group(candidate)
             )
             if group in seen_groups:
@@ -314,7 +314,7 @@ class MnemisLiteGraphRetriever(GraphRetriever):
     def _graph_selection_key(
         candidate: Dict[str, Any],
     ) -> tuple[float, float, float, float, float]:
-        direct_route = 1.0 if candidate.get("_mnemis_route") == "direct" else 0.0
+        direct_route = 1.0 if candidate.get("_graph_route") == "direct" else 0.0
         return (
             direct_route,
             float(candidate.get("_final_score", 0.0) or 0.0),
