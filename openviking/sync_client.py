@@ -280,9 +280,15 @@ class SyncOpenViking:
         """Read L1 overview"""
         return run_async(self._async_client.overview(uri))
 
-    def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+    def read(
+        self,
+        uri: str,
+        offset: int = 0,
+        limit: int = -1,
+        raw: bool = False,
+    ) -> str:
         """Read file"""
-        return run_async(self._async_client.read(uri, offset=offset, limit=limit))
+        return run_async(self._async_client.read(uri, offset=offset, limit=limit, raw=raw))
 
     def write(
         self,

@@ -232,6 +232,8 @@ class HierarchicalRetriever:
                 target_dirs=target_dirs,
                 level=level,
                 query_text=query.query,
+                query_vector=query_vector,
+                embedder=self.embedder,
             )
             graph_expanded = True
             coverage_graph_expanded = self._has_coverage_graph_candidates(candidates)
@@ -615,6 +617,8 @@ class HierarchicalRetriever:
         target_dirs: Optional[List[str]] = None,
         level: Optional[List[int]] = None,
         query_text: Optional[str] = None,
+        query_vector: Optional[List[float]] = None,
+        embedder: Optional[Any] = None,
     ) -> List[Dict[str, Any]]:
         """Run graph-based expansion when link_enabled and graph_alpha > 0."""
         if not candidates:
@@ -643,14 +647,9 @@ class HierarchicalRetriever:
             logger.debug("[HierarchicalRetriever] Graph index empty, skipping graph expansion")
             return candidates
 
-        if self.retrieval_config.graph_strategy == "mnemis_lite":
-            from openviking.retrieve.graph.mnemis_lite import MnemisLiteGraphRetriever
+        from openviking.retrieve.graph.evidence_graph import EvidenceGraphRetriever
 
-            graph_retriever = MnemisLiteGraphRetriever(index, self.retrieval_config)
-        else:
-            from openviking.retrieve.graph.graph_retriever import GraphRetriever
-
-            graph_retriever = GraphRetriever(index, self.retrieval_config)
+        graph_retriever = EvidenceGraphRetriever(index, self.retrieval_config)
         return await graph_retriever.expand(
             candidates,
             ctx,
@@ -658,6 +657,8 @@ class HierarchicalRetriever:
             target_dirs=target_dirs,
             level=level,
             query_text=query_text,
+            query_vector=query_vector,
+            embedder=embedder,
         )
 
     def _get_graph_space_uris(

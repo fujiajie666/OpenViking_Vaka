@@ -56,14 +56,21 @@ def _build_mnemis_index() -> GraphIndex:
     return index
 
 
-def test_retrieval_config_defaults_to_legacy_graph_strategy():
-    assert RetrievalConfig().graph_strategy == "legacy"
+def test_retrieval_config_defaults_to_evidence_graph_strategy():
+    assert RetrievalConfig().graph_strategy == "evidence_graph"
+    assert RetrievalConfig().graph_edge_selector == "embedding"
+    assert RetrievalConfig().graph_intent_source == "fallback"
     assert RetrievalConfig(graph_strategy="mnemis_lite").graph_strategy == "mnemis_lite"
 
 
 def test_retrieval_config_rejects_unknown_graph_strategy():
     with pytest.raises(ValidationError):
         RetrievalConfig(graph_strategy="not_a_strategy")
+
+
+def test_retrieval_config_rejects_unknown_graph_intent_source():
+    with pytest.raises(ValidationError):
+        RetrievalConfig(graph_intent_source="not_a_source")
 
 
 def test_query_planner_uses_rule_based_slots_without_llm():

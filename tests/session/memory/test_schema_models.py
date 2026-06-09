@@ -287,7 +287,10 @@ class TestSchemaModelGenerator:
         links_field = model.model_fields["links"]
         assert links_field.description == (
             "Links between memory pages. Follow the link rules above. "
-            "Use page_ids for `f` and `t`. Use `weight` from 0 to 1 to rank competing links."
+            "Use page_ids for `f` and `t`. Use evidence fields such as "
+            "`subject`, `relation_slot`, `answer_value`, `evidence_role`, "
+            "and `source_span` for answer-bearing links. "
+            "Use `weight` from 0 to 1 for answer evidence quality, not broad topic similarity."
         )
 
     def test_generate_all_models(self, real_registry):

@@ -280,7 +280,10 @@ class SchemaModelGenerator:
                     default_factory=list,
                     description=(
                         "Links between memory pages. Follow the link rules above. "
-                        "Use page_ids for `f` and `t`. Use `weight` from 0 to 1 to rank competing links."
+                        "Use page_ids for `f` and `t`. For answer-bearing links, keep "
+                        "`relation_slot` reusable and `answer_value` as the smallest "
+                        "returnable answer text, with proof in `source_span`. "
+                        "Use `weight` for answer evidence quality, not broad topic similarity."
                     ),
                 ),
             )

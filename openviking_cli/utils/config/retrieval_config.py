@@ -36,19 +36,35 @@ class RetrievalConfig(BaseModel):
         ge=0.0,
         le=1.0,
         description=(
-            "Weight for bounded graph (PPR) boosts in the final hybrid ranking. "
-            "0 disables graph retrieval entirely; higher values give graph-supported "
+            "Weight for bounded graph evidence boosts in the final hybrid ranking. "
+            "0 disables graph retrieval entirely; higher values give selected graph "
             "candidates more room to move toward the strongest semantic score. "
             "Only effective when memory.link_enabled is True."
         ),
     )
-    graph_strategy: Literal["legacy", "mnemis_lite"] = Field(
-        default="legacy",
+    graph_strategy: Literal["legacy", "mnemis_lite", "evidence_graph"] = Field(
+        default="evidence_graph",
         description=(
             "Graph retrieval strategy used when memory.link_enabled is True and "
-            "graph_alpha > 0. 'legacy' preserves the existing evidence-gated "
-            "append behavior; 'mnemis_lite' enables the experimental dual-route "
-            "graph strategy."
+            "graph_alpha > 0. 'evidence_graph' uses structured answer-evidence "
+            "links with conservative graph expansion. 'legacy' and 'mnemis_lite' "
+            "are accepted as compatibility aliases."
+        ),
+    )
+    graph_edge_selector: Literal["embedding", "llm"] = Field(
+        default="embedding",
+        description=(
+            "Evidence edge selector used by the evidence_graph strategy. "
+            "'embedding' is the low-latency default; 'llm' reranks compact "
+            "embedding-prefiltered edge candidates and falls back to embedding on failure."
+        ),
+    )
+    graph_intent_source: Literal["fallback", "llm"] = Field(
+        default="fallback",
+        description=(
+            "Intent source used by evidence_graph. 'fallback' uses a small generic "
+            "rule planner; 'llm' asks the configured VLM for subjects, answer_kind, "
+            "and aggregation_mode, then falls back to rules on failure."
         ),
     )
     graph_ppr_restart: float = Field(
@@ -74,7 +90,7 @@ class RetrievalConfig(BaseModel):
         default=20,
         ge=5,
         le=100,
-        description="Number of top PPR-scoring nodes to add to the candidate pool.",
+        description="Maximum number of graph evidence candidates to add to the candidate pool.",
     )
     graph_path_count: int = Field(
         default=3,
@@ -84,14 +100,16 @@ class RetrievalConfig(BaseModel):
     )
     graph_type_weights: Dict[str, float] = Field(
         default_factory=lambda: {
-            "belongs_to": 1.5,
+            "evidence_for": 1.4,
+            "context_for": 0.4,
+            "belongs_to": 0.5,
             "caused_by": 1.3,
             "derived_from": 1.2,
             "evolved_from": 1.1,
-            "related_to": 1.0,
+            "related_to": 0.25,
             "contradicts": 0.8,
         },
-        description="Multiplier applied to edge weight by link_type during PPR transition.",
+        description="Legacy per-link-type weights kept for compatibility with graph configs.",
     )
     graph_seed_include_summaries: bool = Field(
         default=False,

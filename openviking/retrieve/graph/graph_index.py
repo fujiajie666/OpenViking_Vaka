@@ -35,6 +35,26 @@ class GraphEdge:
     link_type: str
     weight: float
     description: str = ""
+    match_text: str = ""
+    subject: str = ""
+    relation_slot: str = ""
+    answer_value: List[str] = field(default_factory=list)
+    evidence_role: str = "context"
+    source_span: str = ""
+
+    def is_evidence_edge(self) -> bool:
+        return self.link_type == "evidence_for" or self.evidence_role in {
+            "direct",
+            "list_member",
+            "count_member",
+            "derived_intersection",
+        }
+
+    def is_navigation_or_context(self) -> bool:
+        return self.link_type in {"context_for", "belongs_to", "related_to"} or self.evidence_role in {
+            "context",
+            "navigation",
+        }
 
 
 class GraphIndex:
@@ -164,7 +184,13 @@ class GraphIndex:
                 if not to_uri:
                     continue
                 link_type = link_data.get("link_type", "related_to")
-                edge_key = (uri, to_uri, link_type)
+                edge_key = (
+                    uri,
+                    to_uri,
+                    link_type,
+                    str(link_data.get("relation_slot", "") or ""),
+                    tuple(self._string_list(link_data.get("answer_value"))),
+                )
                 if edge_key in seen_edges:
                     continue
                 seen_edges.add(edge_key)
@@ -174,9 +200,23 @@ class GraphIndex:
                     link_type=link_type,
                     weight=float(link_data.get("weight", 1.0)),
                     description=link_data.get("description", ""),
+                    match_text=str(link_data.get("match_text", "") or ""),
+                    subject=str(link_data.get("subject", "") or ""),
+                    relation_slot=str(link_data.get("relation_slot", "") or ""),
+                    answer_value=self._string_list(link_data.get("answer_value")),
+                    evidence_role=str(link_data.get("evidence_role", "context") or "context"),
+                    source_span=str(link_data.get("source_span", "") or ""),
                 )
                 forward_edges[edge.from_uri].append(edge)
                 reverse_edges[edge.to_uri].append(edge)
+
+    @staticmethod
+    def _string_list(value: Any) -> List[str]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(item) for item in value if str(item).strip()]
+        return [str(value)]
 
     def is_fresh(self, space_uris: List[str]) -> bool:
         """Check if cached index is still valid for the given space URIs."""
@@ -197,6 +237,12 @@ class GraphIndex:
 
     def get_reverse_edges(self, uri: str) -> List[GraphEdge]:
         return self._reverse_edges.get(uri, [])
+
+    def get_all_edges(self) -> List[GraphEdge]:
+        edges: List[GraphEdge] = []
+        for edge_list in self._forward_edges.values():
+            edges.extend(edge_list)
+        return edges
 
     def has_node(self, uri: str) -> bool:
         return uri in self._nodes

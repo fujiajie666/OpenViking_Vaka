@@ -224,12 +224,13 @@ class VikingClient:
         entries = await self.client.ls(path, recursive=recursive)
         return entries
 
-    async def read_content(self, uri: str, level: str = "abstract") -> str:
+    async def read_content(self, uri: str, level: str = "abstract", raw: bool = False) -> str:
         """读取内容
 
         Args:
             uri: Viking URI
             level: 读取级别 ("abstract" - L0摘要, "overview" - L1概览, "read" - L2完整内容)
+            raw: 是否读取包含 MEMORY_FIELDS 的原始内容，仅 level="read" 生效
         """
         try:
             if level == "abstract":
@@ -237,7 +238,7 @@ class VikingClient:
             elif level == "overview":
                 return await self.client.overview(uri)
             elif level == "read":
-                return await self.client.read(uri)
+                return await self.client.read(uri, raw=raw)
             else:
                 raise ValueError(f"Unsupported level: {level}")
         except FileNotFoundError:

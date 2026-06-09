@@ -519,6 +519,11 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     link.weight,
                     link.match_text,
                     link.description,
+                    link.subject,
+                    link.relation_slot,
+                    tuple(link.answer_value or []),
+                    link.evidence_role,
+                    link.source_span,
                 )
                 if link_key in seen_links:
                     continue
@@ -532,6 +537,11 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     match_text=link.match_text,
                     description=link.description,
                     created_at=now,
+                    subject=link.subject,
+                    relation_slot=link.relation_slot,
+                    answer_value=link.answer_value,
+                    evidence_role=link.evidence_role,
+                    source_span=link.source_span,
                 )
                 resolved_links.append(stored_link)
 

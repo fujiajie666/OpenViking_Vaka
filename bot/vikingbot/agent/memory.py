@@ -1,6 +1,7 @@
 """Memory system for persistent agent memory."""
 
 import asyncio
+import json
 import re
 import time
 from pathlib import Path
@@ -13,6 +14,8 @@ from vikingbot.openviking_mount.ov_server import VikingClient
 from vikingbot.utils.helpers import ensure_dir
 
 
+MEMORY_FIELDS_RE = re.compile(r"<!--\s*MEMORY_FIELDS\s*(\{.*?\})\s*-->", re.S)
+TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
 class MemoryStore:
@@ -33,27 +36,50 @@ class MemoryStore:
         except (TypeError, ValueError):
             return 0.0
 
+    @staticmethod
+    def _get_match_reason(memory: Any) -> str:
+        return (
+            memory.get("match_reason", "")
+            if isinstance(memory, dict)
+            else getattr(memory, "match_reason", "")
+        )
+
     @classmethod
     def _limit_memory_groups(
         cls,
         result: dict[str, list[Any]],
         limit: int,
+        graph_limit: int = 6,
     ) -> dict[str, list[Any]]:
         user_memories = result.get("user_memory", [])
         agent_memories = result.get("agent_memory", [])
-        ranked: list[tuple[float, str, int, Any]] = []
+        ranked_regular: list[tuple[float, str, int, Any]] = []
+        ranked_graph: list[tuple[float, str, int, Any]] = []
 
         for group, memories in (
             ("user_memory", user_memories),
             ("agent_memory", agent_memories),
         ):
             for index, memory in enumerate(memories):
+                ranked = ranked_graph if cls._get_match_reason(memory) else ranked_regular
                 ranked.append((cls._get_score(memory), group, index, memory))
 
         selected = {
             (group, index)
-            for _, group, index, _ in sorted(ranked, key=lambda item: item[0], reverse=True)[:limit]
+            for _, group, index, _ in sorted(
+                ranked_regular,
+                key=lambda item: item[0],
+                reverse=True,
+            )[:limit]
         }
+        selected.update(
+            (group, index)
+            for _, group, index, _ in sorted(
+                ranked_graph,
+                key=lambda item: item[0],
+                reverse=True,
+            )[:graph_limit]
+        )
         return {
             "user_memory": [
                 memory
@@ -66,6 +92,96 @@ class MemoryStore:
                 if ("agent_memory", index) in selected
             ],
         }
+
+    @staticmethod
+    def _tokens(text: str) -> set[str]:
+        tokens = set()
+        for token in TOKEN_RE.findall((text or "").lower()):
+            tokens.add(token)
+            if len(token) > 3 and token.endswith("s"):
+                tokens.add(token[:-1])
+        return tokens
+
+    @classmethod
+    def _pick_evidence_spans(
+        cls,
+        content: str,
+        query_text: str | None,
+        max_spans: int = 2,
+    ) -> list[str]:
+        query_tokens = cls._tokens(query_text or "")
+        if not query_tokens:
+            return []
+
+        candidates: list[tuple[float, int, str]] = []
+        match = MEMORY_FIELDS_RE.search(content or "")
+        if not match:
+            return []
+
+        try:
+            fields = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(fields, dict):
+            return []
+
+        links = list(fields.get("links") or []) + list(fields.get("backlinks") or [])
+        for index, link in enumerate(links):
+            if not isinstance(link, dict):
+                continue
+            span = str(link.get("source_span") or "").strip()
+            if not span:
+                continue
+            evidence_text = " ".join(
+                [
+                    str(link.get("subject") or ""),
+                    str(link.get("relation_slot") or ""),
+                    " ".join(str(value) for value in link.get("answer_value") or []),
+                    span,
+                ]
+            )
+            overlap = len(query_tokens & cls._tokens(evidence_text))
+            if overlap:
+                candidates.append((float(overlap), index, span))
+
+        candidates.sort(key=lambda item: (-item[0], item[1]))
+        min_score = max(1.0, candidates[0][0] - 1) if candidates else 0.0
+        spans = []
+        seen = set()
+        for score, _, span in candidates:
+            if score < min_score:
+                continue
+            normalized = " ".join(span.split())
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            spans.append(normalized)
+            if len(spans) >= max_spans:
+                break
+        return spans
+
+    @staticmethod
+    def _strip_memory_fields(content: str) -> str:
+        return MEMORY_FIELDS_RE.sub("", content or "").strip()
+
+    @staticmethod
+    def _build_evidence_snippet_memory(
+        index: int,
+        uri: str,
+        score: float,
+        spans: list[str],
+        max_content_chars: int = 500,
+    ) -> str:
+        content = "\n".join(f"- {span}" for span in spans if span)
+        if len(content) > max_content_chars:
+            content = content[: max_content_chars - 3].rstrip() + "..."
+        return (
+            f'<memory index="{index}" type="evidence_snippet">\n'
+            f"  <uri>{uri}</uri>\n"
+            f"  <score>{score}</score>\n"
+            f"  <content>{content}</content>\n"
+            f"</memory>"
+        )
 
     def read_long_term(self) -> str:
         if self.memory_file.exists():
@@ -173,8 +289,33 @@ class MemoryStore:
         user_memories = []
         link_only_memories: list[tuple[str, float]] = []
         total_chars = 0
+        fallback_snippet_chars = 0
+        fallback_snippet_budget = 1200
+        fallback_snippet_max_chars = 500
         seen_content_hashes = set()
         next_index = 1
+
+        def append_fallback_snippet(uri: str, score: float, text: str) -> bool:
+            nonlocal fallback_snippet_chars, next_index
+            spans = self._pick_evidence_spans(text, query_text)
+            if not spans:
+                return False
+            snippet_memory_str = self._build_evidence_snippet_memory(
+                next_index,
+                uri,
+                score,
+                spans,
+                max_content_chars=fallback_snippet_max_chars,
+            )
+            snippet_chars = len(snippet_memory_str)
+            if user_memories:
+                snippet_chars += 1
+            if fallback_snippet_chars + snippet_chars > fallback_snippet_budget:
+                return False
+            user_memories.append(snippet_memory_str)
+            fallback_snippet_chars += snippet_chars
+            next_index += 1
+            return True
 
         for memory in filtered_memories:
             uri = get_uri(memory)
@@ -184,7 +325,7 @@ class MemoryStore:
             # First, try to build full memory with content
             content = ""
             try:
-                content = await client.read_content(uri, level="read")
+                content = await client.read_content(uri, level="read", raw=True)
             except Exception as e:
                 logger.warning(f"Failed to read content from {uri}: {e}")
 
@@ -197,12 +338,13 @@ class MemoryStore:
                 seen_content_hashes.add(content_hash)
 
             if content:
+                prompt_content = self._strip_memory_fields(content)
                 # Try full version first (no abstract when content is present)
                 full_memory_str = (
                     f'<memory index="{next_index}" type="full">\n'
                     f"  <uri>{uri}</uri>\n"
                     f"  <score>{score}</score>\n"
-                    f"  <content>{content}</content>\n"
+                    f"  <content>{prompt_content}</content>\n"
                     f"</memory>"
                 )
                 full_chars = len(full_memory_str)
@@ -214,15 +356,16 @@ class MemoryStore:
                     total_chars += full_chars
                     next_index += 1
                 else:
-                    link_only_memories.append((uri, score))
+                    if not append_fallback_snippet(uri, score, content):
+                        link_only_memories.append((uri, score))
             else:
-                # No content available, use link-only version (always add)
-                logger.info(f"Using link-only for {uri} (read failed or empty)")
-                link_only_memories.append((uri, score))
-
+                if not append_fallback_snippet(uri, score, abstract):
+                    # No content available, use link-only version (always add)
+                    logger.info(f"Using link-only for {uri} (read failed or empty)")
+                    link_only_memories.append((uri, score))
 
         graph_snippet_chars = 0
-        graph_snippet_budget = 3200
+        graph_snippet_budget = 2400
         graph_snippet_max_chars = 600
         graph_snippet_limit = 8
         graph_snippet_count = 0

@@ -436,10 +436,16 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.overview(uri)
 
-    async def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+    async def read(
+        self,
+        uri: str,
+        offset: int = 0,
+        limit: int = -1,
+        raw: bool = False,
+    ) -> str:
         """Read file content"""
         await self._ensure_initialized()
-        return await self._client.read(uri, offset=offset, limit=limit)
+        return await self._client.read(uri, offset=offset, limit=limit, raw=raw)
 
     async def write(
         self,

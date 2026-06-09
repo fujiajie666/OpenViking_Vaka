@@ -124,13 +124,20 @@ class BaseClient(ABC):
     # ============= Content Reading =============
 
     @abstractmethod
-    async def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+    async def read(
+        self,
+        uri: str,
+        offset: int = 0,
+        limit: int = -1,
+        raw: bool = False,
+    ) -> str:
         """Read file content (L2).
 
         Args:
             uri: Viking URI
             offset: Starting line number (0-indexed). Default 0.
             limit: Number of lines to read. -1 means read to end. Default -1.
+            raw: Return raw stored content without memory-field cleanup.
         """
         ...
 

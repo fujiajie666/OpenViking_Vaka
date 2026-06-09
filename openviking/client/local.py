@@ -240,13 +240,20 @@ class LocalClient(BaseClient):
 
     # ============= Content Reading =============
 
-    async def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+    async def read(
+        self,
+        uri: str,
+        offset: int = 0,
+        limit: int = -1,
+        raw: bool = False,
+    ) -> str:
         """Read file content.
 
         Args:
             uri: Viking URI
             offset: Starting line number (0-indexed). Default 0.
             limit: Number of lines to read. -1 means read to end. Default -1.
+            raw: Accepted for HTTP client compatibility; local reads are already raw.
         """
         return await self._service.fs.read(uri, ctx=self._ctx, offset=offset, limit=limit)
 

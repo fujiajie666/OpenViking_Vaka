@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Typed Weighted Personalized PageRank for graph-based retrieval."""
 
-from typing import TYPE_CHECKING, Dict
+from typing import TYPE_CHECKING, Callable, Dict, Optional
 
 from openviking_cli.utils.logger import get_logger
 
@@ -25,12 +25,14 @@ class TypedWeightedPPR:
         restart: float = 0.15,
         max_iter: int = 50,
         tolerance: float = 1e-4,
+        edge_weight_fn: Optional[Callable[[object, str], float]] = None,
     ):
         self._graph = graph_index
         self._type_weights = type_weights
         self._restart = restart
         self._max_iter = max_iter
         self._tolerance = tolerance
+        self._edge_weight_fn = edge_weight_fn
 
     def run(self, seed_uris: Dict[str, float]) -> Dict[str, float]:
         """Run PPR from seed nodes.
@@ -110,14 +112,24 @@ class TypedWeightedPPR:
 
             # Forward edges (this node is the source)
             for edge in self._graph.get_forward_edges(uri):
-                tw = self._type_weights.get(edge.link_type, 1.0)
-                weight = edge.weight * tw
+                if self._edge_weight_fn:
+                    weight = self._edge_weight_fn(edge, "forward")
+                else:
+                    tw = self._type_weights.get(edge.link_type, 1.0)
+                    weight = edge.weight * tw
+                if weight <= 0:
+                    continue
                 outgoing[edge.to_uri] = outgoing.get(edge.to_uri, 0.0) + weight
 
             # Reverse edges (this node is the target) with direction penalty
             for edge in self._graph.get_reverse_edges(uri):
-                tw = self._type_weights.get(edge.link_type, 1.0)
-                weight = edge.weight * tw * _REVERSE_DIRECTION_PENALTY
+                if self._edge_weight_fn:
+                    weight = self._edge_weight_fn(edge, "reverse")
+                else:
+                    tw = self._type_weights.get(edge.link_type, 1.0)
+                    weight = edge.weight * tw * _REVERSE_DIRECTION_PENALTY
+                if weight <= 0:
+                    continue
                 outgoing[edge.from_uri] = outgoing.get(edge.from_uri, 0.0) + weight
 
             if not outgoing:

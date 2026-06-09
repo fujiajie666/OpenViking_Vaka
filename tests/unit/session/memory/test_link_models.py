@@ -44,6 +44,25 @@ class TestWikiLink:
         link = WikiLink(f=1, t=2, weight=0.8, match_text=None)
         assert link.weight == 0.8
 
+    def test_evidence_fields_are_normalized(self):
+        link = WikiLink(
+            f=1,
+            t=2,
+            link_type="evidence_for",
+            weight=0.95,
+            match_text="books",
+            subject="John",
+            relation_slot="Read Book",
+            answer_value="The Alchemist",
+            evidence_role="List Member",
+            source_span="John read The Alchemist.",
+        )
+
+        assert link.relation_slot == "read_book"
+        assert link.answer_value == ["The Alchemist"]
+        assert link.evidence_role == "list_member"
+        assert link.source_span == "John read The Alchemist."
+
     def test_weight_is_clamped_to_zero_when_negative(self):
         link = WikiLink(f=1, t=2, weight=-0.2, match_text=None)
         assert link.weight == 0.0
@@ -95,6 +114,25 @@ class TestStoredLink:
         assert d["to_uri"] == "viking://b"
         assert d["link_type"] == "related_to"
         assert "direction" not in d
+
+    def test_model_dump_preserves_evidence_fields(self):
+        link = StoredLink(
+            from_uri="viking://a",
+            to_uri="viking://b",
+            link_type="evidence_for",
+            subject="Tim",
+            relation_slot="visited_place",
+            answer_value=["London"],
+            evidence_role="list_member",
+            source_span="Tim visited London.",
+            created_at="2026-05-09T10:00:00+00:00",
+        )
+
+        dumped = link.model_dump()
+        assert dumped["relation_slot"] == "visited_place"
+        assert dumped["answer_value"] == ["London"]
+        assert dumped["evidence_role"] == "list_member"
+        assert dumped["source_span"] == "Tim visited London."
 
 
 class TestResolvedOperationsLinks:

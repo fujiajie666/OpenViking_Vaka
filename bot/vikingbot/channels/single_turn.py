@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+from pydantic import Field
 
 from vikingbot.bus.events import InboundMessage, OutboundMessage
 from vikingbot.bus.queue import MessageBus
@@ -21,6 +22,7 @@ class SingleTurnChannelConfig(BaseChannelConfig):
     enabled: bool = True
     type: Any = "cli"
     _channel_id: str = "default"
+    disabled_tools: list[str] = Field(default_factory=list)
 
     def channel_id(self) -> str:
         return self._channel_id
@@ -66,6 +68,8 @@ class SingleTurnChannel(BaseChannel):
         metadata = {}
         if self.config.memory_user:
             metadata["memory_users"] = self.config.memory_user
+        if self.config.disabled_tools:
+            metadata["disabled_tools"] = self.config.disabled_tools
         msg = InboundMessage(
             session_key=SessionKey(
                 type="cli",

@@ -614,6 +614,7 @@ def prepare_agent_channel(
     eval: bool = False,
     sender: str | None = None,
     memory_user: list[str] | None = None,
+    disabled_tools: list[str] | None = None,
 ):
     """Prepare channel for agent command."""
     from vikingbot.channels.chat import ChatChannel, ChatChannelConfig
@@ -622,7 +623,10 @@ def prepare_agent_channel(
     channels = ChannelManager(bus)
     if message is not None:
         # Single message mode - use SingleTurnChannel for clean output
-        channel_config = SingleTurnChannelConfig(memory_user=memory_user)
+        channel_config = SingleTurnChannelConfig(
+            memory_user=memory_user,
+            disabled_tools=disabled_tools or [],
+        )
         channel = SingleTurnChannel(
             channel_config,
             bus,
@@ -673,6 +677,9 @@ def chat(
     memory_user: list[str] = typer.Option(
         None, "--memory-user", help="User ID for memory retrieval (can be repeated)"
     ),
+    disabled_tools: list[str] = typer.Option(
+        None, "--disable-tool", help="Tool name to disable for this request (can be repeated)"
+    ),
 ):
     """Interact with the agent directly."""
     path = Path(config_path).expanduser() if config_path is not None else None
@@ -706,7 +713,16 @@ def chat(
         session_id = get_or_create_machine_id()
     cron = prepare_cron(bus, quiet=is_single_turn)
     channels = prepare_agent_channel(
-        config, bus, message, session_id, markdown, logs, eval, sender, memory_user
+        config,
+        bus,
+        message,
+        session_id,
+        markdown,
+        logs,
+        eval,
+        sender,
+        memory_user,
+        disabled_tools,
     )
     agent_loop = prepare_agent_loop(
         config, bus, session_manager, cron, quiet=is_single_turn, eval=eval

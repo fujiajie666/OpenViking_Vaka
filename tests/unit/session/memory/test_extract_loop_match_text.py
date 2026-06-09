@@ -120,6 +120,43 @@ class TestResolveOperations:
             "op_page_map_keys=[]"
         )
 
+    def test_resolve_links_preserves_evidence_fields(self):
+        loop = ExtractLoop(vlm=Mock(model="test-model"), viking_fs=Mock(), context_provider=Mock())
+        loop._extract_context = Mock()
+        loop._extract_context.page_id_map = Mock()
+        loop._extract_context.page_id_map._id_to_uri = {
+            1: "viking://user/a/memories/entities/person/John.md",
+            2: "viking://user/a/memories/events/2023/01/01/book_read.md",
+        }
+        loop._extract_context.page_id_map.resolve.side_effect = lambda page_id: {
+            1: "viking://user/a/memories/entities/person/John.md",
+            2: "viking://user/a/memories/events/2023/01/01/book_read.md",
+        }.get(page_id)
+
+        resolved = loop._resolve_links(
+            [
+                WikiLink(
+                    f=1,
+                    t=2,
+                    link_type="evidence_for",
+                    weight=0.95,
+                    match_text="book",
+                    subject="John",
+                    relation_slot="read_book",
+                    answer_value=["The Alchemist"],
+                    evidence_role="list_member",
+                    source_span="John read The Alchemist.",
+                )
+            ],
+            upsert_operations=[],
+        )
+
+        assert len(resolved) == 1
+        assert resolved[0].relation_slot == "read_book"
+        assert resolved[0].answer_value == ["The Alchemist"]
+        assert resolved[0].evidence_role == "list_member"
+        assert resolved[0].source_span == "John read The Alchemist."
+
 
 class TestResolveLinksMultiUri:
     def test_shared_page_id_pairs_matching_user_uris_only(self):

@@ -384,6 +384,7 @@ def run_vikingbot_chat(
     question_id: str | None = None,
     config: str | None = None,
     memory_users: list[str] | None = None,
+    disabled_tools: list[str] | None = None,
 ) -> tuple[str, dict, float, int, list, dict]:
     """执行vikingbot chat命令，返回回答、token使用、耗时、迭代、工具和检索记忆信息"""
     def reset_session() -> None:
@@ -404,6 +405,9 @@ def run_vikingbot_chat(
         if memory_users:
             for user in memory_users:
                 new_cmd.extend(["--memory-user", user])
+        if disabled_tools:
+            for tool in disabled_tools:
+                new_cmd.extend(["--disable-tool", tool])
         try:
             subprocess.run(new_cmd, capture_output=True, text=True, timeout=300)
         except Exception:
@@ -425,6 +429,9 @@ def run_vikingbot_chat(
     if memory_users:
         for user in memory_users:
             cmd.extend(["--memory-user", user])
+    if disabled_tools:
+        for tool in disabled_tools:
+            cmd.extend(["--disable-tool", tool])
     start_time = time.time()
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=600)
@@ -451,7 +458,7 @@ def run_vikingbot_chat(
         )
 
 
-def load_processed_questions(output_path: str, skip_done: bool = False) -> set[str]:
+def load_processed_questions(output_path: str, skip_done: bool = False) -> set[tuple[str, str]]:
     """加载已处理的问题集合。"""
     if not skip_done or not os.path.exists(output_path):
         return set()
@@ -460,9 +467,10 @@ def load_processed_questions(output_path: str, skip_done: bool = False) -> set[s
     with open(output_path, "r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            question = row.get("question")
-            if question:
-                processed_questions.add(question)
+            sample_id = row.get("sample_id")
+            question_index = row.get("question_index")
+            if sample_id and question_index is not None:
+                processed_questions.add((sample_id, str(question_index)))
     return processed_questions
 
 
@@ -574,6 +582,15 @@ def main():
         "--skip-done",
         action="store_true",
         help="Skip questions already present in the output file",
+    )
+    parser.add_argument(
+        "--disable-tool",
+        action="append",
+        default=["web_search", "web_fetch"],
+        help=(
+            "Disable a vikingbot tool during evaluation. Can be repeated. "
+            "Default: web_search, web_fetch"
+        ),
     )
     args = parser.parse_args()
 
@@ -699,7 +716,11 @@ def main():
     processed_count = 0
 
     # 过滤掉已经处理过的问题
-    remaining_qa = [qa for qa in qa_list if qa["question"] not in processed_questions]
+    remaining_qa = [
+        qa
+        for qa in qa_list
+        if (qa["sample_id"], str(qa.get("question_index", ""))) not in processed_questions
+    ]
     remaining_count = len(remaining_qa)
     print(
         f"Starting evaluation with {args.threads} concurrent threads, {remaining_count} questions to process"
@@ -733,6 +754,7 @@ def main():
             question_id,
             args.config,
             None if not args.group_chat else speakers,
+            args.disable_tool,
         )
 
         row = {
@@ -793,7 +815,9 @@ def main():
             else:
                 append_row_to_csv(args.output, fieldnames, row)
 
-            processed_questions.add(question)
+            processed_questions.add(
+                (qa_item["sample_id"], str(qa_item.get("question_index", "")))
+            )
             processed_count += 1
             print(f"Completed {processed_count}/{total_count}, time cost: {round(time_cost, 2)}s")
         return True

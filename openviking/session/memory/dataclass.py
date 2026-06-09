@@ -5,7 +5,6 @@ Core domain data classes for memory system.
 """
 
 import json
-import re
 from datetime import datetime
 from enum import Enum
 from typing import (
@@ -38,18 +37,99 @@ T = TypeVar("T")
 
 
 LINK_TYPE_DEFAULT = "related_to"
-_LINK_TYPE_RE = re.compile(r"^[a-z]+(?:_[a-z]+){0,2}$")
 
 
 class LinkType(str, Enum):
     """Legacy predefined link labels kept for compatibility in tests/call sites."""
 
     RELATED_TO = LINK_TYPE_DEFAULT
+    EVIDENCE_FOR = "evidence_for"
+    CONTEXT_FOR = "context_for"
     BELONGS_TO = "belongs_to"
     CAUSED_BY = "caused_by"
     DERIVED_FROM = "derived_from"
     CONTRADICTS = "contradicts"
     EVOLVED_FROM = "evolved_from"
+
+
+_CANONICAL_LINK_TYPES = {item.value for item in LinkType}
+_LINK_TYPE_ALIASES = {
+    "evidence": LinkType.EVIDENCE_FOR.value,
+    "answer_evidence": LinkType.EVIDENCE_FOR.value,
+    "direct_evidence": LinkType.EVIDENCE_FOR.value,
+    "context": LinkType.CONTEXT_FOR.value,
+    "background": LinkType.CONTEXT_FOR.value,
+    "context_with": LinkType.CONTEXT_FOR.value,
+    "contextual": LinkType.CONTEXT_FOR.value,
+    "belong_to": LinkType.BELONGS_TO.value,
+    "part_of": LinkType.BELONGS_TO.value,
+    "member_of": LinkType.BELONGS_TO.value,
+    "relates_to": LinkType.RELATED_TO.value,
+    "topic": LinkType.RELATED_TO.value,
+    "topic_related": LinkType.RELATED_TO.value,
+    "associated_with": LinkType.RELATED_TO.value,
+    "derived": LinkType.DERIVED_FROM.value,
+    "extracted_from": LinkType.DERIVED_FROM.value,
+    "caused": LinkType.CAUSED_BY.value,
+    "causes": LinkType.CAUSED_BY.value,
+    "contradict": LinkType.CONTRADICTS.value,
+    "conflicts_with": LinkType.CONTRADICTS.value,
+    "evolved": LinkType.EVOLVED_FROM.value,
+    "changed_from": LinkType.EVOLVED_FROM.value,
+}
+_EVIDENCE_ROLE_ALIASES = {
+    "list": "list_member",
+    "count": "count_member",
+    "intersection": "derived_intersection",
+    "shared": "derived_intersection",
+    "background": "context",
+    "profile": "navigation",
+}
+
+
+def _snake_case(value: Any) -> str:
+    return str(value).strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _normalize_link_payload(data: Any) -> Any:
+    """Normalize LLM-produced link fields while safely degrading unknown labels."""
+    if not isinstance(data, dict):
+        return data
+
+    raw_weight = data.get("weight")
+    if raw_weight is not None:
+        try:
+            data["weight"] = min(1.0, max(0.0, float(raw_weight)))
+        except (TypeError, ValueError):
+            data["weight"] = 0.5
+
+    raw_link_type = _snake_case(data.get("link_type") or LINK_TYPE_DEFAULT)
+    link_type = _LINK_TYPE_ALIASES.get(raw_link_type, raw_link_type)
+    if link_type not in _CANONICAL_LINK_TYPES:
+        link_type = LINK_TYPE_DEFAULT
+        data["weight"] = min(float(data.get("weight", 0.5)), 0.45)
+        data["evidence_role"] = "context"
+    data["link_type"] = link_type
+
+    raw_relation_slot = data.get("relation_slot")
+    if raw_relation_slot is not None:
+        data["relation_slot"] = _snake_case(raw_relation_slot)
+
+    raw_evidence_role = data.get("evidence_role")
+    if raw_evidence_role is not None:
+        role = _snake_case(raw_evidence_role)
+        data["evidence_role"] = _EVIDENCE_ROLE_ALIASES.get(role, role)
+
+    raw_answer_value = data.get("answer_value")
+    if raw_answer_value is not None:
+        if isinstance(raw_answer_value, str):
+            data["answer_value"] = [raw_answer_value]
+        elif isinstance(raw_answer_value, list):
+            data["answer_value"] = [str(item) for item in raw_answer_value if str(item).strip()]
+        else:
+            data["answer_value"] = [str(raw_answer_value)]
+
+    return data
 
 
 class WikiLink(BaseModel):
@@ -63,22 +143,7 @@ class WikiLink(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def normalize_link_fields(cls, data: Any) -> Any:
-        if isinstance(data, dict):
-            raw_link_type = data.get("link_type")
-            if raw_link_type is not None:
-                normalized = str(raw_link_type).strip().lower().replace("-", "_").replace(" ", "_")
-                if _LINK_TYPE_RE.fullmatch(normalized):
-                    data["link_type"] = normalized
-                else:
-                    data["link_type"] = LINK_TYPE_DEFAULT
-
-            raw_weight = data.get("weight")
-            if raw_weight is not None:
-                try:
-                    data["weight"] = min(1.0, max(0.0, float(raw_weight)))
-                except (TypeError, ValueError):
-                    data["weight"] = 0.5
-        return data
+        return _normalize_link_payload(data)
 
     f: Annotated[Optional[int], WithJsonSchema({"type": "integer"})] = Field(
         ..., description="From page_id. Use the page_id from the item's 'page_id' field."
@@ -89,20 +154,17 @@ class WikiLink(BaseModel):
     link_type: str = Field(
         LINK_TYPE_DEFAULT,
         description=(
-            "A short relation label describing how the source relates to the target. "
-            "Prefer one of these lowercase snake_case values: belongs_to, related_to, "
-            "derived_from, caused_by, contradicts, evolved_from. "
-            "Use belongs_to for part-of/profile membership, related_to for general association, "
-            "derived_from for extracted/summary facts, caused_by for direct causation, "
-            "contradicts for mutually inconsistent facts, and evolved_from for time-based changes. "
-            "Do not invent new link_type values unless absolutely necessary."
+            "Retrieval safety label, not the fact predicate. Use evidence_for only when the "
+            "target states an answerable fact; use context_for for background, belongs_to for "
+            "profile/navigation membership, and related_to only as a weak topic fallback."
         ),
     )
     weight: float = Field(
         0.5,
         description=(
-            "Relative ranking score from 0 to 1; use higher values for the best link "
-            "when multiple links compete for the same anchor or attention."
+            "Evidence strength from 0 to 1. Use high weight only for evidence_for links with "
+            "subject, relation_slot, and answer_value or source_span. Use <=0.45 for broad "
+            "topic, profile, navigation, or related_to links."
         ),
     )
     match_text: Annotated[
@@ -121,10 +183,47 @@ class WikiLink(BaseModel):
         ),
     )
     description: str = Field("", description="Brief explanation of the relationship")
+    subject: Optional[str] = Field(
+        None,
+        description="Person or entity the fact is about; use the speaker/owner, not every mentioned name.",
+    )
+    relation_slot: Optional[str] = Field(
+        None,
+        description=(
+            "Reusable snake_case fact slot, not an event-specific phrase. Prefer slots such as "
+            "visited_place, read_book, read_author, watched_movie, likes_sport, does_training, "
+            "won_event, writes_genre, destresses_by, researched_topic, bought_item, received_gift, "
+            "has_child, or career_high_performance."
+        ),
+    )
+    answer_value: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Smallest answer text to return for this fact: place, person, title, author, activity, "
+            "item, topic, event, date, or number. Leave empty for context links."
+        ),
+    )
+    evidence_role: str = Field(
+        "context",
+        description=(
+            "Optional role hint. Use direct for answer evidence, context for background, and "
+            "navigation for profile/path links. Use list_member/count_member/intersection only "
+            "when the memory explicitly lists, counts, or compares facts."
+        ),
+    )
+    source_span: Optional[str] = Field(
+        None,
+        description="Shortest phrase from the memory text or image metadata proving answer_value.",
+    )
 
 
 class StoredLink(BaseModel):
     """Persisted link in MEMORY_FIELDS, with URIs instead of page_ids."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_link_fields(cls, data: Any) -> Any:
+        return _normalize_link_payload(data)
 
     from_uri: str
     to_uri: str
@@ -133,6 +232,11 @@ class StoredLink(BaseModel):
     match_text: Optional[str] = None  # single word, must exist verbatim in conversation
     description: str = ""
     created_at: str = ""
+    subject: Optional[str] = None
+    relation_slot: Optional[str] = None
+    answer_value: List[str] = Field(default_factory=list)
+    evidence_role: str = "context"
+    source_span: Optional[str] = None
 
 
 # ============================================================================
