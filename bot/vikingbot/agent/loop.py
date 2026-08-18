@@ -1174,8 +1174,9 @@ class AgentLoop:
                 "Original system instructions (preserve any hard constraints verbatim):\n"
                 f"{system_text[:40_000]}\n\n{user_content}"
             )
-        response = await self.provider.chat(
-            messages=[
+        return await self._chat_compact_summary(
+            session_key,
+            [
                 {
                     "role": "system",
                     "content": (
@@ -1189,12 +1190,7 @@ class AgentLoop:
                 },
                 {"role": "user", "content": user_content},
             ],
-            tools=[],
-            model=self.model,
-            temperature=0.0,
-            session_id=session_key.safe_name(),
         )
-        return (response.content or "").strip()
 
     async def _merge_compact_summaries(
         self,
@@ -1215,8 +1211,9 @@ class AgentLoop:
                 "Original system instructions (preserve any hard constraints verbatim):\n"
                 f"{system_text[:40_000]}\n\n{user_content}"
             )
-        response = await self.provider.chat(
-            messages=[
+        return await self._chat_compact_summary(
+            session_key,
+            [
                 {
                     "role": "system",
                     "content": (
@@ -1231,12 +1228,25 @@ class AgentLoop:
                 },
                 {"role": "user", "content": user_content},
             ],
-            tools=[],
-            model=self.model,
-            temperature=0.0,
-            session_id=session_key.safe_name(),
         )
-        return (response.content or "").strip()
+
+    async def _chat_compact_summary(self, session_key: SessionKey, messages: list[dict]) -> str:
+        for attempt in range(1, 4):
+            try:
+                response = await self.provider.chat(
+                    messages=messages,
+                    tools=[],
+                    model=self.model,
+                    temperature=0.0,
+                    session_id=session_key.safe_name(),
+                )
+                summary = (response.content or "").strip()
+                if summary:
+                    return summary
+                logger.warning("Tool-loop compaction summary attempt {}/3 was empty", attempt)
+            except Exception as exc:
+                logger.warning("Tool-loop compaction summary attempt {}/3 failed: {}", attempt, exc)
+        return ""
 
     async def _run_agent_loop(
         self,

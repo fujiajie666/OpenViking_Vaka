@@ -127,9 +127,9 @@ def _source_reading_workflow(*, materialized: bool) -> str:
             "the relevant windows"
         )
         materialized_override = (
-            " Only files whose manifest status is NOT `materialized` (i.e. `skipped:binary` "
-            "or `skipped:download-error`) may be read with openviking_multi_read/"
-            "openviking_grep instead."
+            " Only files not materialized locally (including skipped manifest entries and "
+            "entries omitted from a truncated catalog) may be read with "
+            "openviking_multi_read/openviking_grep instead."
         )
         step6 = (
             "6. Reads are auto-tracked in a readlist; the per-turn reminder shows which files "
@@ -731,6 +731,9 @@ class BotCompileService:
 
             await self._set_state(task_id, status="running", stage="collecting_context")
             sources = await self._build_sources(client, request.from_)
+            catalog_truncated = any(
+                bool(source.get("catalog_truncated")) for source in sources
+            )
             is_skill_target = target_type == "skill"
             if is_skill_target:
                 catalog: list[dict[str, Any]] = []
@@ -816,6 +819,7 @@ class BotCompileService:
                 wiki_uri_resolver=resolve_wiki_uri,
                 capabilities=capabilities,
                 materialized=materialized_manifest is not None,
+                source_fallback=catalog_truncated,
                 readlist=readlist,
             )
             submit_tool = registry.get("submit_wiki_bundle")
@@ -828,6 +832,7 @@ class BotCompileService:
                 sources=sources,
                 materialized_manifest=materialized_manifest,
                 materialize_warnings=materialize_warnings,
+                catalog_truncated=catalog_truncated,
             )
             if len(system_prompt) + len(user_prompt) > self.limits.initial_prompt_chars:
                 raise CompileFailure(
@@ -1800,8 +1805,7 @@ class BotCompileService:
     ) -> tuple[list[str], str | None]:
         """Eagerly export every source file into the task sandbox.
 
-        The full source tree is materialized (no per-file or total-byte cap, no
-        "newest first" truncation) so the agent can scan it locally with
+        The bounded source catalog is materialized so the agent can scan it locally with
         ``exec``/``read_file`` instead of round-tripping each probe through the
         OpenViking server. Files are namespaced per source root under
         ``compile_resources/<source_id>/`` and a ``_manifest.tsv`` records the
@@ -1812,9 +1816,34 @@ class BotCompileService:
         """
         warnings: list[str] = []
         rows: list[tuple[str, str, str, int, str]] = []
-        semaphore = asyncio.Semaphore(_MATERIALIZE_CONCURRENCY)
+        entries = [
+            (str(source.get("source_id") or ""), entry)
+            for source in sources
+            for entry in source.get("entries", [])
+            if isinstance(entry, Mapping) and not entry.get("is_dir")
+        ]
+        if not entries:
+            return warnings, None
+        declared_sizes = [
+            int(entry["size"])
+            if isinstance(entry.get("size"), int) and entry["size"] >= 0
+            else 0
+            for _source_id, entry in entries
+        ]
+        if (
+            len(entries) > self.limits.source_files
+            or sum(declared_sizes) > self.limits.source_total_bytes
+        ):
+            raise CompileFailure(
+                "RESOURCE_EXHAUSTED",
+                "Compile sources exceed the materialization limits.",
+                stage="collecting_context",
+            )
+
+        downloaded_total = 0
 
         async def export_one(source_id: str, entry: Mapping[str, Any]) -> None:
+            nonlocal downloaded_total
             uri = str(entry.get("uri") or "").rstrip("/")
             if not uri:
                 return
@@ -1823,15 +1852,21 @@ class BotCompileService:
             )
             size = entry.get("size")
             size_int = int(size) if isinstance(size, int) and size >= 0 else 0
-            async with semaphore:
-                try:
-                    payload = await client.download_bytes(uri)
-                except Exception as exc:
-                    warnings.append(f"failed to materialize {uri}: {exc}")
-                    rows.append(
-                        (source_id, uri, workspace_path, size_int, "skipped:download-error")
-                    )
-                    return
+            try:
+                payload = await client.download_bytes(uri)
+            except Exception as exc:
+                warnings.append(f"failed to materialize {uri}: {exc}")
+                rows.append(
+                    (source_id, uri, workspace_path, size_int, "skipped:download-error")
+                )
+                return
+            downloaded_total += len(payload)
+            if downloaded_total > self.limits.source_total_bytes:
+                raise CompileFailure(
+                    "RESOURCE_EXHAUSTED",
+                    "Downloaded Compile sources exceed the materialization limits.",
+                    stage="collecting_context",
+                )
             try:
                 text = payload.decode("utf-8")
             except UnicodeDecodeError:
@@ -1840,15 +1875,13 @@ class BotCompileService:
             await sandbox.write_file(workspace_path, text)
             rows.append((source_id, uri, workspace_path, size_int, "materialized"))
 
-        tasks = [
-            export_one(str(source.get("source_id") or ""), entry)
-            for source in sources
-            for entry in source.get("entries", [])
-            if isinstance(entry, Mapping) and not entry.get("is_dir")
-        ]
-        if not tasks:
-            return warnings, None
-        await asyncio.gather(*tasks)
+        for offset in range(0, len(entries), _MATERIALIZE_CONCURRENCY):
+            await asyncio.gather(
+                *(
+                    export_one(source_id, entry)
+                    for source_id, entry in entries[offset : offset + _MATERIALIZE_CONCURRENCY]
+                )
+            )
 
         manifest_lines = ["source_id\turi\tworkspace_path\tsize\tstatus"]
         for source_id, uri, workspace_path, size, status in sorted(
@@ -1991,6 +2024,7 @@ class BotCompileService:
         wiki_uri_resolver: Callable[[str], Awaitable[bool]] | None = None,
         capabilities: CompileCapabilities,
         materialized: bool = False,
+        source_fallback: bool = False,
         readlist: ReadlistTracker | None = None,
     ) -> tuple[ToolRegistry, set[str]]:
         selected = _COMPILE_CORE_TOOLS | _OV_READ_TOOLS
@@ -1999,6 +2033,12 @@ class BotCompileService:
             # compile_resources/<source_id>/...; letting the agent call openviking_export again
             # only writes a duplicate tree (compile_resources/<name>/...) and burns turns/tokens.
             selected = selected - {"openviking_export"}
+            if not source_fallback:
+                selected = selected - {
+                    "openviking_list",
+                    "openviking_glob",
+                    "openviking_multi_read",
+                }
         if capabilities.exec_enabled:
             selected = selected | {"exec"}
         registry = ToolRegistry(config=request_loop.config)
@@ -2050,6 +2090,7 @@ class BotCompileService:
         sources: list[dict[str, Any]] | None = None,
         materialized_manifest: str | None = None,
         materialize_warnings: list[str] | None = None,
+        catalog_truncated: bool = False,
     ) -> tuple[str, str]:
         if capabilities.exec_enabled:
             command_rule = (
@@ -2079,8 +2120,14 @@ class BotCompileService:
             if materialize_warnings:
                 materialization_note += (
                     "\nSome source files could NOT be materialized; inspect those with "
-                    "openviking_grep/openviking_multi_read instead: "
+                    "openviking_grep instead: "
                     + "; ".join(materialize_warnings)
+                )
+            if catalog_truncated:
+                materialization_note += (
+                    "\nThe source catalog was truncated, so some entries are not in the local "
+                    "manifest. Use openviking_list/openviking_glob/openviking_multi_read to "
+                    "inspect and read those remaining entries."
                 )
         source_roots_text = json.dumps(list(request.from_), ensure_ascii=False)
         source_inventory_text = _source_inventory_text(sources or [])

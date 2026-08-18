@@ -27,6 +27,8 @@ class CompileLimits(BaseModel):
 
     source_roots: int = 16
     source_catalog_entries: int = 200
+    source_files: int = 5000
+    source_total_bytes: int = 1024 * 1024 * 1024
     skill_files: int = 128
     skill_file_bytes: int = 8 * 1024 * 1024
     skill_total_bytes: int = 32 * 1024 * 1024
@@ -46,7 +48,7 @@ class CompileLimits(BaseModel):
     accepted_tasks: int = 40
     accepted_tasks_per_principal: int = 10
     queue_wait_seconds: float = 60 * 60
-    task_runtime_seconds: float = 40 * 60
+    task_runtime_seconds: float = 60 * 60
     salvage_grace_seconds: float = 120
     cleanup_grace_seconds: float = 40
     terminal_task_retention_seconds: float = 24 * 60 * 60

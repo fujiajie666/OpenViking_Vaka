@@ -138,8 +138,10 @@ def test_compile_limit_defaults_match_the_resource_envelope():
     assert limits.accepted_tasks == 40
     assert limits.accepted_tasks_per_principal == 10
     assert limits.queue_wait_seconds == 60 * 60
-    assert limits.task_runtime_seconds == 40 * 60
+    assert limits.task_runtime_seconds == 60 * 60
     assert limits.agent_iterations == 60
+    assert limits.source_files == 5000
+    assert limits.source_total_bytes == 1024 * 1024 * 1024
     assert limits.salvage_grace_seconds == 120
     assert limits.cleanup_grace_seconds == 40
     assert limits.target_inventory_entries == 2000
@@ -1310,6 +1312,20 @@ class _FakeCompileSessionKey:
         return "cmp"
 
 
+class _FlakyChatProvider:
+    def __init__(self, outcomes):
+        self.outcomes = iter(outcomes)
+        self.calls = 0
+
+    async def chat(self, messages, tools, model, temperature, session_id, **kwargs):
+        del messages, tools, model, temperature, session_id, kwargs
+        self.calls += 1
+        outcome = next(self.outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return SimpleNamespace(content=outcome, reasoning_content=None, usage={})
+
+
 def _compact_loop(provider):
     loop = object.__new__(AgentLoop)
     loop.provider = provider
@@ -1338,6 +1354,29 @@ async def test_compact_tool_loop_summarizes_and_truncates():
     # A rolling window of the most recent complete turns is retained verbatim
     # (not just the last two arbitrary messages).
     assert out[3:] == messages[-3:]
+
+
+@pytest.mark.asyncio
+async def test_compact_tool_loop_retries_summary_then_uses_trim_fallback():
+    messages = [
+        {"role": "system", "content": "SYS"},
+        {"role": "user", "content": "TASK"},
+        {"role": "assistant", "content": "important old finding"},
+        {"role": "user", "content": "old result"},
+        {"role": "assistant", "content": "recent action"},
+        {"role": "user", "content": "recent result"},
+    ]
+    recovered = _FlakyChatProvider([RuntimeError("temporary"), "", "RECOVERED"])
+    out = await _compact_loop(recovered)._compact_tool_loop(messages, _FakeCompileSessionKey())
+    assert recovered.calls == 3
+    assert "RECOVERED" in out[2]["content"]
+
+    failed = _FlakyChatProvider([RuntimeError("down"), "", RuntimeError("still down")])
+    out = await _compact_loop(failed)._compact_tool_loop(messages, _FakeCompileSessionKey())
+    assert failed.calls == 3
+    assert "Earlier turns were compacted" in out[2]["content"]
+    assert "important old finding" not in str(out)
+    assert out[-3:] == messages[-3:]
 
 
 @pytest.mark.asyncio
@@ -1569,6 +1608,101 @@ async def test_materialize_sources_records_download_failures_without_crashing():
     assert manifest_path == "compile_resources/_manifest.tsv"
     assert any("failed to materialize" in warning for warning in warnings)
     assert "skipped:download-error" in sandbox.writes["compile_resources/_manifest.tsv"]
+
+
+@pytest.mark.asyncio
+async def test_materialize_sources_enforces_limits_before_download():
+    class Client:
+        def __init__(self):
+            self.downloads = []
+
+        async def download_bytes(self, uri):
+            self.downloads.append(uri)
+            return b"x"
+
+    service = object.__new__(BotCompileService)
+    service.limits = CompileLimits(source_files=1)
+    client = Client()
+    sources = [
+        {
+            "source_id": "src_1",
+            "entries": [
+                {"uri": "viking://resources/s/a.txt", "is_dir": False, "size": 1},
+                {"uri": "viking://resources/s/b.txt", "is_dir": False, "size": 1},
+            ],
+        }
+    ]
+
+    with pytest.raises(CompileFailure) as raised:
+        await service._materialize_sources(
+            client=client, sources=sources, sandbox=SimpleNamespace()
+        )
+
+    assert raised.value.code == "RESOURCE_EXHAUSTED"
+    assert client.downloads == []
+
+
+@pytest.mark.asyncio
+async def test_materialize_sources_enforces_actual_total_size():
+    class Client:
+        async def download_bytes(self, uri):
+            del uri
+            return b"xx"
+
+    service = object.__new__(BotCompileService)
+    service.limits = CompileLimits(source_total_bytes=1)
+    sources = [
+        {
+            "source_id": "src_1",
+            "entries": [{"uri": "viking://resources/s/a.txt", "is_dir": False, "size": 0}],
+        }
+    ]
+
+    with pytest.raises(CompileFailure) as raised:
+        await service._materialize_sources(
+            client=Client(), sources=sources, sandbox=SimpleNamespace()
+        )
+
+    assert raised.value.code == "RESOURCE_EXHAUSTED"
+
+
+@pytest.mark.asyncio
+async def test_materialize_sources_bounds_downloaded_payloads(monkeypatch):
+    state = {"pending": 0, "peak": 0}
+
+    class Client:
+        async def download_bytes(self, uri):
+            del uri
+            state["pending"] += 1
+            state["peak"] = max(state["peak"], state["pending"])
+            return b"x"
+
+    class Sandbox:
+        async def write_file(self, path, content):
+            del path, content
+            await asyncio.sleep(0.01)
+            state["pending"] -= 1
+
+    monkeypatch.setattr("vikingbot.compile.service._MATERIALIZE_CONCURRENCY", 2)
+    service = object.__new__(BotCompileService)
+    service.limits = CompileLimits()
+    sources = [
+        {
+            "source_id": "src_1",
+            "entries": [
+                {
+                    "uri": f"viking://resources/s/{index}.txt",
+                    "is_dir": False,
+                    "size": 1,
+                }
+                for index in range(5)
+            ],
+        }
+    ]
+
+    await service._materialize_sources(client=Client(), sources=sources, sandbox=Sandbox())
+
+    assert state["peak"] <= 2
 
 
 def test_compile_prompt_mentions_materialized_manifest_when_available():
@@ -2622,9 +2756,10 @@ async def test_execute_skill_target_skips_recursive_catalog_and_completes(
         wiki_uri_resolver,
         capabilities,
         materialized=False,
+        source_fallback=False,
         readlist=None,
     ):
-        del request_loop, roots, source_ids, materialized, readlist
+        del request_loop, roots, source_ids, materialized, source_fallback, readlist
         assert capabilities == CompileCapabilities(exec_enabled=False)
         assert catalog_uris == set()
         assert file_catalog_uris == set()
@@ -3123,9 +3258,15 @@ def test_compile_registry_has_a_fixed_ara_compatible_tool_set(exec_enabled):
     assert submit.exec_enabled is exec_enabled
 
 
-def test_compile_registry_drops_export_tool_when_sources_are_materialized():
+def test_compile_registry_keeps_source_fallback_tools_only_when_needed():
     available = ToolRegistry()
-    for name in ("read_file", "openviking_export", "openviking_multi_read"):
+    for name in (
+        "read_file",
+        "openviking_export",
+        "openviking_list",
+        "openviking_glob",
+        "openviking_multi_read",
+    ):
         available.register(_NamedTool(name))
     request_loop = SimpleNamespace(tools=available, config=None)
     service = object.__new__(BotCompileService)
@@ -3144,8 +3285,29 @@ def test_compile_registry_drops_export_tool_when_sources_are_materialized():
         materialized=True,
     )
     assert "openviking_export" not in materialized_registry.tool_names
-    assert "openviking_export" not in materialized_ov
-    assert "openviking_multi_read" in materialized_registry.tool_names
+    assert not {
+        "openviking_list",
+        "openviking_glob",
+        "openviking_multi_read",
+    } & set(materialized_registry.tool_names)
+
+    fallback_registry, fallback_ov = service._build_compile_registry(
+        **common,
+        capabilities=CompileCapabilities(exec_enabled=False),
+        materialized=True,
+        source_fallback=True,
+    )
+    assert "openviking_export" not in fallback_registry.tool_names
+    assert {
+        "openviking_list",
+        "openviking_glob",
+        "openviking_multi_read",
+    } <= set(fallback_registry.tool_names)
+    assert fallback_ov == {
+        "openviking_list",
+        "openviking_glob",
+        "openviking_multi_read",
+    }
 
     eager_registry, eager_ov = service._build_compile_registry(
         **common,
@@ -3178,6 +3340,14 @@ def test_compile_prompt_uses_materialized_workflow_when_manifest_available():
     )
     assert "read `compile_resources/_manifest.tsv`" in materialized_system
     assert "Do NOT use openviking_list" in materialized_system
+
+    truncated_system, _ = BotCompileService._build_prompts(
+        **common,
+        materialized_manifest="compile_resources/_manifest.tsv",
+        catalog_truncated=True,
+    )
+    assert "source catalog was truncated" in truncated_system
+    assert "openviking_list/openviking_glob/openviking_multi_read" in truncated_system
 
     eager_system, _ = BotCompileService._build_prompts(**common)
     assert "Map the corpus first: run openviking_list" in eager_system

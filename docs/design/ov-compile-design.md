@@ -585,6 +585,7 @@ v1 先使用集中定义、可测试的 `CompileLimits`，不把常量散落在 
 | 项目 | 默认值 |
 | --- | --- |
 | source roots | 16 |
+| source materialization files / 总大小 | 5,000 / 1 GiB |
 | Skill files / 单文件 / 总大小 | 128 / 8 MiB / 32 MiB |
 | target inventory entries / relevance catalog pages | 2,000 / 10 |
 | initial prompt characters | 200,000 |
