@@ -37,8 +37,6 @@ def to_pascal_case(s: str) -> str:
     return "".join(word.title() for word in words)
 
 
-# decision_reasoning is temporarily disabled because it adds tokens to every extraction.
-# Keep the model here so it can be restored if page-level reasoning is needed again.
 # from typing import Literal
 #
 # class PageDecision(BaseModel):
@@ -169,13 +167,11 @@ class SchemaModelGenerator:
         for field in memory_type.fields:
             base_type = self._map_field_type(field.field_type)
             if field.merge_op == MergeOp.IMMUTABLE:
-                # Existing items are located by page_id and their immutable fields
-                # are restored from the read file in ExtractLoop.resolve_operations().
-                # New items still require these fields via the conditional validator below.
+                # Immutable fields: only base type, required
                 immutable_field_names.append(field.name)
                 field_definitions[field.name] = (
                     base_type,
-                    Field(None, description=self._render_description(field.description)),
+                    Field(..., description=self._render_description(field.description)),
                 )
             else:
                 # Mutable fields: Union[base_type, patch_type], optional
@@ -189,45 +185,10 @@ class SchemaModelGenerator:
                     Optional[union_type],
                     Field(None, description=desc),
                 )
-        validators = {}
-        model_config = ConfigDict(extra="ignore")
-        if immutable_field_names:
-            required_for_new = tuple(immutable_field_names)
-
-            def require_immutable_fields_for_new(item):
-                if item.page_id >= 100:
-                    missing = [
-                        name for name in required_for_new if getattr(item, name, None) is None
-                    ]
-                    if missing:
-                        raise ValueError(
-                            "New memory items require immutable fields: " + ", ".join(missing)
-                        )
-                return item
-
-            validators["require_immutable_fields_for_new"] = model_validator(mode="after")(
-                require_immutable_fields_for_new
-            )
-            model_config = ConfigDict(
-                extra="ignore",
-                json_schema_extra={
-                    "allOf": [
-                        {
-                            "if": {
-                                "properties": {"page_id": {"minimum": 100}},
-                                "required": ["page_id"],
-                            },
-                            "then": {"required": list(required_for_new)},
-                        }
-                    ]
-                },
-            )
-
         # Create the model
         model = create_model(
             model_name,
-            __config__=model_config,
-            __validators__=validators,
+            __config__=ConfigDict(extra="ignore"),
             **field_definitions,
         )
 
@@ -275,7 +236,6 @@ class SchemaModelGenerator:
         # Build field definitions for each memory_type
         field_definitions: Dict[str, Tuple[Type[Any], Any]] = {}
 
-        # decision_reasoning is temporarily disabled to avoid spending output tokens.
         # if self._include_decision_reasoning:
         #     field_definitions["decision_reasoning"] = (
         #         List[PageDecision],
