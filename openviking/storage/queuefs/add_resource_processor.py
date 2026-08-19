@@ -211,9 +211,12 @@ class AddResourceProcessor(DequeueHandlerBase):
                     result = deepcopy(replay_result)
                 await tracker.wait_for_descendants(msg.task_id, metadata.work_id)
                 result.setdefault(
-                    "queue_status",
-                    request_wait_tracker.build_queue_status(telemetry_id),
+                    "queue_status", request_wait_tracker.build_queue_status(telemetry_id)
                 )
+                if replay_result is None:
+                    result["context_count"] = request_wait_tracker.get_embedding_context_count(
+                        telemetry_id
+                    )
                 record_resource_queue_metrics(
                     telemetry=telemetry,
                     telemetry_id=telemetry_id,
