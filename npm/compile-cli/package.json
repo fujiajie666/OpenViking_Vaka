@@ -1,0 +1,38 @@
+{
+  "name": "@openviking-compile/cli",
+  "version": "0.0.0",
+  "description": "Read-only OpenViking CLI for cloud agents",
+  "bin": {
+    "ov": "bin/ov.mjs"
+  },
+  "scripts": {
+    "postinstall": "node bin/postinstall.mjs"
+  },
+  "type": "module",
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "optionalDependencies": {
+    "@openviking-compile/cli-darwin-arm64": "0.0.0",
+    "@openviking-compile/cli-darwin-x64": "0.0.0",
+    "@openviking-compile/cli-linux-arm64": "0.0.0",
+    "@openviking-compile/cli-linux-x64": "0.0.0",
+    "@openviking-compile/cli-win32-x64": "0.0.0"
+  },
+  "keywords": [
+    "openviking",
+    "cli",
+    "agent",
+    "read-only",
+    "search"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fujiajie666/OpenViking_Vaka.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

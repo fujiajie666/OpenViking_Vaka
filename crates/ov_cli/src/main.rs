@@ -1,7 +1,11 @@
+#![cfg_attr(feature = "compile-cli", allow(dead_code, unused_imports))]
+
 mod base_client;
 mod cli_arg_scan;
 mod client;
 mod commands;
+#[cfg(feature = "compile-cli")]
+mod compile_cli;
 mod config;
 mod config_agent;
 mod config_command_ui;
@@ -2813,6 +2817,13 @@ fn render_pre_language_help_request(args: &[OsString]) -> Option<String> {
     help_ui::render_command_help_request(args).or_else(|| Some(error.to_string()))
 }
 
+#[cfg(feature = "compile-cli")]
+#[tokio::main]
+async fn main() {
+    compile_cli::run().await;
+}
+
+#[cfg(not(feature = "compile-cli"))]
 #[tokio::main]
 async fn main() {
     let args = preprocess_cli_args(std::env::args_os().collect());

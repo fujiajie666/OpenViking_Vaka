@@ -1,0 +1,243 @@
+name: Compile CLI Build and Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/ov_cli/**"
+      - "npm/compile-cli/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/compile-cli-release.yml"
+    tags:
+      - "compile-cli@*"
+  pull_request:
+    branches: [main]
+    paths:
+      - "crates/ov_cli/**"
+      - "npm/compile-cli/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/compile-cli-release.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            npm_pkg: cli-linux-x64
+            npm_os: linux
+            npm_cpu: x64
+          - os: ubuntu-24.04
+            target: aarch64-unknown-linux-musl
+            npm_pkg: cli-linux-arm64
+            npm_os: linux
+            npm_cpu: arm64
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            npm_pkg: cli-darwin-x64
+            npm_os: darwin
+            npm_cpu: x64
+          - os: macos-14
+            target: aarch64-apple-darwin
+            npm_pkg: cli-darwin-arm64
+            npm_os: darwin
+            npm_cpu: arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            npm_pkg: cli-win32-x64
+            npm_os: win32
+            npm_cpu: x64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Install Zig and cargo-zigbuild
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIG_VERSION=0.13.0
+          ZIG_DIR="$RUNNER_TEMP/zig-$ZIG_VERSION"
+          mkdir -p "$ZIG_DIR"
+          curl -fsSL "https://ziglang.org/download/$ZIG_VERSION/zig-linux-x86_64-$ZIG_VERSION.tar.xz" \
+            | tar -xJ --strip-components=1 -C "$ZIG_DIR"
+          echo "$ZIG_DIR" >> "$GITHUB_PATH"
+          cargo install --locked cargo-zigbuild
+
+      - name: Cache Cargo files
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-compile-cli-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'crates/**/*.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-compile-cli-${{ matrix.target }}-
+            ${{ runner.os }}-compile-cli-
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/compile-cli@}"
+          if [[ "$VERSION" == "$GITHUB_REF" ]]; then
+            VERSION="0.0.0-dev"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Inject release version
+        if: startsWith(github.ref, 'refs/tags/compile-cli@')
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          sed -i.bak "s/^version = \"0.0.0\"/version = \"$VERSION\"/" crates/ov_cli/Cargo.toml
+          rm -f crates/ov_cli/Cargo.toml.bak
+
+      - name: Build read-only CLI
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            cargo zigbuild --release --target ${{ matrix.target }} -p ov_cli --features compile-cli
+          else
+            cargo build --release --target ${{ matrix.target }} -p ov_cli --features compile-cli
+          fi
+
+      - name: Package native npm module
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          PKG_DIR="npm-pkg"
+          mkdir -p "$PKG_DIR/bin"
+
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            cp "target/${{ matrix.target }}/release/ov.exe" "$PKG_DIR/bin/ov.exe"
+          else
+            cp "target/${{ matrix.target }}/release/ov" "$PKG_DIR/bin/ov"
+            chmod +x "$PKG_DIR/bin/ov"
+          fi
+
+          node -e "
+            const pkg = {
+              name: '@openviking-compile/${{ matrix.npm_pkg }}',
+              version: process.env.VERSION,
+              description: 'Read-only OpenViking CLI binary for ${{ matrix.npm_os }}-${{ matrix.npm_cpu }}',
+              os: ['${{ matrix.npm_os }}'],
+              cpu: ['${{ matrix.npm_cpu }}'],
+              files: ['bin'],
+              license: 'Apache-2.0',
+              repository: {
+                type: 'git',
+                url: 'git+https://github.com/fujiajie666/OpenViking_Vaka.git'
+              },
+              publishConfig: { access: 'public' }
+            };
+            require('fs').writeFileSync(
+              '$PKG_DIR/package.json',
+              JSON.stringify(pkg, null, 2) + '\n'
+            );
+          "
+
+      - name: Upload native npm module
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.npm_pkg }}
+          path: npm-pkg/
+
+  npm-publish:
+    name: Publish @openviking-compile/cli
+    runs-on: ubuntu-24.04
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/compile-cli@')
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF#refs/tags/compile-cli@}" >> "$GITHUB_OUTPUT"
+
+      - name: Download native npm modules
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Configure npm authentication
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
+          else
+            echo "NPM_TOKEN is not set; npm Trusted Publishing must already be configured."
+          fi
+
+      - name: Publish native npm modules
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          for pkg_dir in artifacts/cli-*/; do
+            pkg_name=$(basename "$pkg_dir")
+            package="@openviking-compile/$pkg_name"
+            if npm view "$package@$VERSION" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+              echo "Skipping $package@$VERSION; already published."
+              continue
+            fi
+
+            chmod +x "$pkg_dir/bin/ov" 2>/dev/null || true
+            (cd "$pkg_dir" && npm publish --access public --provenance)
+          done
+
+      - name: Publish wrapper npm module
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cd npm/compile-cli
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = process.env.VERSION;
+            for (const dependency of Object.keys(pkg.optionalDependencies || {})) {
+              pkg.optionalDependencies[dependency] = process.env.VERSION;
+            }
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+          if npm view "@openviking-compile/cli@$VERSION" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "Skipping @openviking-compile/cli@$VERSION; already published."
+            exit 0
+          fi
+
+          npm pack --dry-run
+          npm publish --access public --provenance
