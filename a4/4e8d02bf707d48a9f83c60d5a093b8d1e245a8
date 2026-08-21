@@ -1,0 +1,35 @@
+.github/workflows/compile-cli-release.yml
+  s_f4fd446b54bee0::t_a268c877df47d4 1-243
+crates/ov_cli/Cargo.toml
+  s_f4fd446b54bee0::t_6702fe0b752a35 14-17
+crates/ov_cli/src/compile_cli.rs
+  s_f4fd446b54bee0::t_70ee174b8b05ad 1-532
+crates/ov_cli/src/main.rs
+  s_f4fd446b54bee0::t_30100236b63cd9 1-2,7-8,2820-2826
+npm/compile-cli/README.md
+  s_f4fd446b54bee0::t_f6a5788b325027 1-53
+npm/compile-cli/bin/ov.mjs
+  s_f4fd446b54bee0::t_3e9388e9c02d43 1-39
+npm/compile-cli/bin/postinstall.mjs
+  s_f4fd446b54bee0::t_6dbef2936f7a2c 1-19
+npm/compile-cli/package.json
+  s_f4fd446b54bee0::t_a03fe39e6a53e6 1-38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a44e8d02bf707d48a9f83c60d5a093b8d1e245a8",
+  "prompts": {},
+  "sessions": {
+    "s_f4fd446b54bee0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a02518-4b92-7e71-b033-b6dc1c4e7418",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
