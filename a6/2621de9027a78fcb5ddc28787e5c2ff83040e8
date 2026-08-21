@@ -1,0 +1,27 @@
+Cargo.lock
+  s_f4fd446b54bee0::t_96b66bdb72a064 4345
+crates/ov_cli/Cargo.toml
+  s_f4fd446b54bee0::t_2258577ae77ade 20-30
+crates/ov_cli/src/compile_cli.rs
+  s_f4fd446b54bee0::t_6608f18284b0e8 1,469-470,476-480,517-525,532-556
+npm/compile-cli/README.md
+  s_f4fd446b54bee0::t_feb45bec104b2b 21-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a62621de9027a78fcb5ddc28787e5c2ff83040e8",
+  "prompts": {},
+  "sessions": {
+    "s_f4fd446b54bee0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a02518-4b92-7e71-b033-b6dc1c4e7418",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
