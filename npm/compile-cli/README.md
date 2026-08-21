@@ -18,6 +18,12 @@ The CLI reads its API key only from `OPENVIKING_API_KEY`:
 export OPENVIKING_API_KEY="<your-api-key>"
 ```
 
+The value is sent unchanged as a Bearer credential in the `Authorization`
+header. This is compatible with sandbox Vaults that expose a placeholder in
+the environment and replace it at the network egress. The native CLI trusts
+both Mozilla public roots and certificates installed in the operating
+system's trust store, including sandbox egress gateway CAs.
+
 The API endpoint is compiled into the binary and cannot be overridden:
 
 ```text

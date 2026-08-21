@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::ffi::OsString;
 
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
@@ -465,13 +466,18 @@ fn runtime_config(api_key: Option<String>) -> Result<Config> {
                 "{OPENVIKING_API_KEY_ENV} is required. Export it before running ov."
             ))
         })?;
-    api_key
+    let authorization = format!("Bearer {api_key}");
+    authorization
         .parse::<reqwest::header::HeaderValue>()
         .map_err(|_| Error::Config(format!("{OPENVIKING_API_KEY_ENV} is not a valid API key")))?;
 
     Ok(Config {
         url: OPENVIKING_COMPILE_URL.to_string(),
-        api_key: Some(api_key),
+        api_key: None,
+        extra_headers: Some(HashMap::from([(
+            reqwest::header::AUTHORIZATION.as_str().to_string(),
+            authorization,
+        )])),
         echo_command: false,
         ..Config::default()
     })
@@ -508,11 +514,44 @@ mod tests {
         let config = runtime_config(Some("  secret  ".to_string())).expect("valid config");
 
         assert_eq!(config.url, OPENVIKING_COMPILE_URL);
-        assert_eq!(config.api_key.as_deref(), Some("secret"));
+        assert!(config.api_key.is_none());
+        assert_eq!(
+            config
+                .extra_headers
+                .as_ref()
+                .and_then(|headers| headers.get(reqwest::header::AUTHORIZATION.as_str()))
+                .map(String::as_str),
+            Some("Bearer secret")
+        );
         assert!(config.root_api_key.is_none());
         assert!(config.account.is_none());
         assert!(config.user.is_none());
         assert!(!config.echo_command);
+    }
+
+    #[test]
+    fn runtime_config_preserves_vault_placeholder_in_bearer_header() {
+        let config = runtime_config(Some("ARK_SECRET_PLACEHOLDER".to_string()))
+            .expect("Vault placeholder should be accepted");
+        let client = crate::base_client::BaseClient::new(
+            &config.url,
+            config.api_key.clone(),
+            config.account.clone(),
+            config.user.clone(),
+            config.actor_peer_id.clone(),
+            config.timeout,
+            config.profile,
+            config.extra_headers.clone(),
+        );
+        let headers = client.build_headers();
+
+        assert_eq!(
+            headers
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer ARK_SECRET_PLACEHOLDER")
+        );
+        assert!(!headers.contains_key("X-API-Key"));
     }
 
     #[test]
