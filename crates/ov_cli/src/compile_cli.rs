@@ -29,10 +29,10 @@ impl From<OutputArg> for OutputFormat {
     }
 }
 
-/// Read-only OpenViking CLI for cloud agents.
+/// OpenViking retrieval and content-write CLI for cloud agents.
 #[derive(Parser)]
 #[command(name = "ov")]
-#[command(about = "Read-only OpenViking CLI for cloud agents")]
+#[command(about = "OpenViking retrieval and content-write CLI for cloud agents")]
 #[command(version = env!("OPENVIKING_CLI_VERSION"))]
 #[command(arg_required_else_help = true)]
 struct CompileCli {
@@ -55,16 +55,53 @@ struct CompileCli {
     compact: bool,
 
     #[command(subcommand)]
-    command: ReadOnlyCommand,
+    command: CompileCommand,
 }
 
+/// Commands exposed by the compile CLI; mutations are limited to writing text content.
 #[derive(Subcommand)]
-enum ReadOnlyCommand {
+enum CompileCommand {
     /// Read full file content (Level 2).
     Read {
         /// Viking URI.
         #[arg(value_name = "uri")]
         uri: String,
+    },
+
+    /// Write text content.
+    Write {
+        /// Viking URI.
+        #[arg(value_name = "uri")]
+        uri: String,
+        /// Content to write.
+        #[arg(long, conflicts_with = "from_file", value_name = "text")]
+        content: Option<String>,
+        /// Read content from a local file.
+        #[arg(long = "from-file", conflicts_with = "content", value_name = "path")]
+        from_file: Option<String>,
+        /// Append instead of replacing the file.
+        #[arg(long)]
+        append: bool,
+        /// Write mode: replace, append, or create (default: replace).
+        #[arg(long, value_name = "replace|append|create", conflicts_with = "append")]
+        mode: Option<String>,
+        /// Wait for async processing to finish.
+        #[arg(long, default_value = "false")]
+        wait: bool,
+        /// Content post-write processing mode.
+        #[arg(
+            long = "processing-mode",
+            default_value = "semantic_and_vectors",
+            value_parser = ["semantic_and_vectors", "vectors_only"]
+        )]
+        processing_mode: String,
+        /// Optional wait timeout in seconds.
+        #[arg(
+            long,
+            value_parser = crate::config::parse_positive_timeout,
+            value_name = "seconds"
+        )]
+        timeout: Option<f64>,
     },
 
     /// Search file content with a regular expression.
@@ -317,8 +354,37 @@ pub(super) async fn run() {
     );
 
     let result = match cli.command {
-        ReadOnlyCommand::Read { uri } => handlers::handle_read(uri, ctx).await,
-        ReadOnlyCommand::Grep {
+        CompileCommand::Read { uri } => handlers::handle_read(uri, ctx).await,
+        CompileCommand::Write {
+            uri,
+            content,
+            from_file,
+            append,
+            mode,
+            wait,
+            processing_mode,
+            timeout,
+        } => {
+            let effective_mode = if let Some(mode) = mode {
+                mode
+            } else if append {
+                "append".to_string()
+            } else {
+                "replace".to_string()
+            };
+            handlers::handle_write(
+                uri,
+                content,
+                from_file,
+                effective_mode,
+                wait,
+                timeout,
+                processing_mode,
+                ctx,
+            )
+            .await
+        }
+        CompileCommand::Grep {
             uri,
             exclude_uri,
             pattern,
@@ -337,12 +403,12 @@ pub(super) async fn run() {
             )
             .await
         }
-        ReadOnlyCommand::Glob {
+        CompileCommand::Glob {
             pattern,
             uri,
             node_limit,
         } => handlers::handle_glob(pattern, uri, node_limit, ctx).await,
-        ReadOnlyCommand::Ls {
+        CompileCommand::Ls {
             uri,
             simple,
             recursive,
@@ -350,14 +416,14 @@ pub(super) async fn run() {
             all,
             node_limit,
         } => handlers::handle_ls(uri, simple, recursive, abs_limit, all, node_limit, ctx).await,
-        ReadOnlyCommand::Tree {
+        CompileCommand::Tree {
             uri,
             abs_limit,
             all,
             node_limit,
             level_limit,
         } => handlers::handle_tree(uri, abs_limit, all, node_limit, level_limit, ctx).await,
-        ReadOnlyCommand::Find {
+        CompileCommand::Find {
             query,
             image,
             uri,
@@ -384,7 +450,7 @@ pub(super) async fn run() {
             )
             .await
         }
-        ReadOnlyCommand::Search {
+        CompileCommand::Search {
             query,
             image,
             uri,
@@ -489,7 +555,7 @@ mod tests {
     use clap::CommandFactory;
 
     #[test]
-    fn exposes_only_the_seven_read_only_commands() {
+    fn exposes_only_retrieval_and_content_write_commands() {
         let names = CompileCli::command()
             .get_subcommands()
             .map(|command| command.get_name().to_string())
@@ -497,14 +563,57 @@ mod tests {
 
         assert_eq!(
             names,
-            ["read", "grep", "glob", "ls", "tree", "find", "search"]
+            [
+                "read", "write", "grep", "glob", "ls", "tree", "find", "search"
+            ]
         );
     }
 
     #[test]
-    fn rejects_mutating_commands() {
+    fn parses_the_full_write_command_contract() {
+        let cli = CompileCli::try_parse_from([
+            "ov",
+            "write",
+            "viking://resources/a.md",
+            "--content",
+            "hello",
+            "--mode",
+            "create",
+            "--wait",
+            "--processing-mode",
+            "vectors_only",
+            "--timeout",
+            "12.5",
+        ])
+        .expect("write command should parse");
+
+        match cli.command {
+            CompileCommand::Write {
+                uri,
+                content,
+                from_file,
+                append,
+                mode,
+                wait,
+                processing_mode,
+                timeout,
+            } => {
+                assert_eq!(uri, "viking://resources/a.md");
+                assert_eq!(content.as_deref(), Some("hello"));
+                assert!(from_file.is_none());
+                assert!(!append);
+                assert_eq!(mode.as_deref(), Some("create"));
+                assert!(wait);
+                assert_eq!(processing_mode, "vectors_only");
+                assert_eq!(timeout, Some(12.5));
+            }
+            _ => panic!("expected write command"),
+        }
+    }
+
+    #[test]
+    fn rejects_other_mutating_and_administration_commands() {
         assert!(CompileCli::try_parse_from(["ov", "rm", "viking://resources/a"]).is_err());
-        assert!(CompileCli::try_parse_from(["ov", "write", "viking://resources/a"]).is_err());
         assert!(CompileCli::try_parse_from(["ov", "config"]).is_err());
         assert!(CompileCli::try_parse_from(["ov", "list"]).is_err());
     }

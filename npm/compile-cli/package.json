@@ -1,7 +1,7 @@
 {
   "name": "@openviking-compile/cli",
   "version": "0.0.0",
-  "description": "Read-only OpenViking CLI for cloud agents",
+  "description": "OpenViking retrieval and content-write CLI for cloud agents",
   "bin": {
     "ov": "bin/ov.mjs"
   },
@@ -24,8 +24,8 @@
     "openviking",
     "cli",
     "agent",
-    "read-only",
-    "search"
+    "search",
+    "write"
   ],
   "license": "Apache-2.0",
   "repository": {

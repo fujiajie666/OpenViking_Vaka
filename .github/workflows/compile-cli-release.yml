@@ -112,7 +112,7 @@ jobs:
           sed -i.bak "s/^version = \"0.0.0\"/version = \"$VERSION\"/" crates/ov_cli/Cargo.toml
           rm -f crates/ov_cli/Cargo.toml.bak
 
-      - name: Build read-only CLI
+      - name: Build compile CLI
         shell: bash
         run: |
           if [[ "${{ runner.os }}" == "Linux" ]]; then
@@ -140,7 +140,7 @@ jobs:
             const pkg = {
               name: '@openviking-compile/${{ matrix.npm_pkg }}',
               version: process.env.VERSION,
-              description: 'Read-only OpenViking CLI binary for ${{ matrix.npm_os }}-${{ matrix.npm_cpu }}',
+              description: 'OpenViking retrieval and content-write CLI binary for ${{ matrix.npm_os }}-${{ matrix.npm_cpu }}',
               os: ['${{ matrix.npm_os }}'],
               cpu: ['${{ matrix.npm_cpu }}'],
               files: ['bin'],

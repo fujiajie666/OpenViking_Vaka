@@ -8,6 +8,7 @@ Set the API key before use:
 
 Available commands:
   ov read <uri>
+  ov write <uri> --content <text>
   ov grep --uri <uri> <pattern>
   ov glob <pattern> [--uri <uri>]
   ov ls [uri]

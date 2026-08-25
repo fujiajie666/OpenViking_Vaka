@@ -1,6 +1,6 @@
 # @openviking-compile/cli
 
-Read-only OpenViking CLI for cloud agents. The package installs an `ov` command with seven retrieval commands and no mutation or administration commands.
+OpenViking retrieval and content-write CLI for cloud agents. The package installs an `ov` command with seven retrieval commands plus `write`; other mutation and administration commands are not included.
 
 ## Install
 
@@ -37,6 +37,7 @@ The CLI does not read `~/.openviking/ovcli.conf` or `OPENVIKING_CLI_CONFIG_FILE`
 | Command | Purpose |
 | --- | --- |
 | `ov read <uri>` | Read full file content |
+| `ov write <uri> --content <text>` | Replace, append, or create text content |
 | `ov grep --uri <uri> <pattern>` | Search file content with a regular expression |
 | `ov glob <pattern>` | Search file names with a glob pattern |
 | `ov ls [uri]` | List directory contents |
@@ -45,6 +46,16 @@ The CLI does not read `~/.openviking/ovcli.conf` or `OPENVIKING_CLI_CONFIG_FILE`
 | `ov search <query>` | Run context-aware retrieval |
 
 Run `ov <command> --help` for command-specific options. Add `--output json` for machine-readable output.
+
+`write` accepts inline text or a local UTF-8 text file:
+
+```bash
+ov write viking://resources/notes.md --content "updated text"
+ov write viking://resources/notes.md --from-file ./notes.md --append
+ov write viking://resources/new.md --content "new text" --mode create --wait
+```
+
+The write modes are `replace` (default), `append`, and `create`. Use `--processing-mode vectors_only` to skip semantic processing while updating vectors.
 
 ## Supported platforms
 
