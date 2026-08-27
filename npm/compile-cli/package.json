@@ -30,7 +30,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/volcengine/openviking.git"
+    "url": "git+https://github.com/fujiajie666/OpenViking_Vaka.git"
   },
   "publishConfig": {
     "access": "public"
