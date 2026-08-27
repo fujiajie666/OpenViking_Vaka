@@ -33,27 +33,27 @@ jobs:
         include:
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-musl
-            npm_pkg: cli-linux-x64
+            npm_pkg: compile-linux-x64
             npm_os: linux
             npm_cpu: x64
           - os: ubuntu-24.04
             target: aarch64-unknown-linux-musl
-            npm_pkg: cli-linux-arm64
+            npm_pkg: compile-linux-arm64
             npm_os: linux
             npm_cpu: arm64
           - os: macos-15-intel
             target: x86_64-apple-darwin
-            npm_pkg: cli-darwin-x64
+            npm_pkg: compile-darwin-x64
             npm_os: darwin
             npm_cpu: x64
           - os: macos-14
             target: aarch64-apple-darwin
-            npm_pkg: cli-darwin-arm64
+            npm_pkg: compile-darwin-arm64
             npm_os: darwin
             npm_cpu: arm64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            npm_pkg: cli-win32-x64
+            npm_pkg: compile-win32-x64
             npm_os: win32
             npm_cpu: x64
 
@@ -138,7 +138,7 @@ jobs:
 
           node -e "
             const pkg = {
-              name: '@openviking-compile/${{ matrix.npm_pkg }}',
+              name: '@openviking/${{ matrix.npm_pkg }}',
               version: process.env.VERSION,
               description: 'OpenViking retrieval and content-write CLI binary for ${{ matrix.npm_os }}-${{ matrix.npm_cpu }}',
               os: ['${{ matrix.npm_os }}'],
@@ -147,7 +147,7 @@ jobs:
               license: 'Apache-2.0',
               repository: {
                 type: 'git',
-                url: 'git+https://github.com/fujiajie666/OpenViking_Vaka.git'
+                url: 'git+https://github.com/volcengine/openviking.git'
               },
               publishConfig: { access: 'public' }
             };
@@ -164,7 +164,7 @@ jobs:
           path: npm-pkg/
 
   npm-publish:
-    name: Publish @openviking-compile/cli
+    name: Publish @openviking/compile
     runs-on: ubuntu-24.04
     needs: build
     if: startsWith(github.ref, 'refs/tags/compile-cli@')
@@ -207,9 +207,9 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          for pkg_dir in artifacts/cli-*/; do
+          for pkg_dir in artifacts/compile-*/; do
             pkg_name=$(basename "$pkg_dir")
-            package="@openviking-compile/$pkg_name"
+            package="@openviking/$pkg_name"
             if npm view "$package@$VERSION" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
               echo "Skipping $package@$VERSION; already published."
               continue
@@ -234,8 +234,8 @@ jobs:
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
 
-          if npm view "@openviking-compile/cli@$VERSION" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
-            echo "Skipping @openviking-compile/cli@$VERSION; already published."
+          if npm view "@openviking/compile@$VERSION" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "Skipping @openviking/compile@$VERSION; already published."
             exit 0
           fi
 

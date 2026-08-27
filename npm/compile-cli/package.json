@@ -1,5 +1,5 @@
 {
-  "name": "@openviking-compile/cli",
+  "name": "@openviking/compile",
   "version": "0.0.0",
   "description": "OpenViking retrieval and content-write CLI for cloud agents",
   "bin": {
@@ -14,11 +14,11 @@
     "README.md"
   ],
   "optionalDependencies": {
-    "@openviking-compile/cli-darwin-arm64": "0.0.0",
-    "@openviking-compile/cli-darwin-x64": "0.0.0",
-    "@openviking-compile/cli-linux-arm64": "0.0.0",
-    "@openviking-compile/cli-linux-x64": "0.0.0",
-    "@openviking-compile/cli-win32-x64": "0.0.0"
+    "@openviking/compile-darwin-arm64": "0.0.0",
+    "@openviking/compile-darwin-x64": "0.0.0",
+    "@openviking/compile-linux-arm64": "0.0.0",
+    "@openviking/compile-linux-x64": "0.0.0",
+    "@openviking/compile-win32-x64": "0.0.0"
   },
   "keywords": [
     "openviking",
@@ -30,7 +30,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/fujiajie666/OpenViking_Vaka.git"
+    "url": "git+https://github.com/volcengine/openviking.git"
   },
   "publishConfig": {
     "access": "public"

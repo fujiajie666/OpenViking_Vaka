@@ -1,14 +1,18 @@
-# @openviking-compile/cli
+# @openviking/compile
 
 OpenViking retrieval and content-write CLI for cloud agents. The package installs an `ov` command with seven retrieval commands plus `write`; other mutation and administration commands are not included.
 
 ## Install
 
 ```bash
-npm i -g @openviking-compile/cli
+npm i -g @openviking/compile
 ```
 
-Do not install this package globally alongside `@openviking/cli`; both packages provide an executable named `ov`.
+Do not install this package globally alongside `@openviking/cli`; both packages provide an executable named `ov`. Install one package globally, or run this restricted distribution in an isolated project with `npm exec`.
+
+```bash
+npm exec --yes --package=@openviking/compile -- ov --help
+```
 
 ## Authentication
 
