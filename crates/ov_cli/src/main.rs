@@ -756,6 +756,9 @@ enum Commands {
         /// Only include results matching all of these explicit tags
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Option<Vec<String>>,
+        /// Include the full visible content for every matched URI
+        #[arg(long, help_heading = "Advanced options")]
+        read_content: bool,
     },
     /// [Experimental][Data] Run context-aware retrieval
     Search {
@@ -825,6 +828,9 @@ enum Commands {
         /// Only include results matching all of these explicit tags
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Option<Vec<String>>,
+        /// Include the full visible content for every matched URI
+        #[arg(long, help_heading = "Advanced options")]
+        read_content: bool,
     },
     /// [Data] Run content pattern search
     Grep {
@@ -3537,6 +3543,7 @@ async fn main() {
             level,
             context_type,
             tags,
+            read_content,
         } => {
             handlers::handle_find(
                 query,
@@ -3549,6 +3556,7 @@ async fn main() {
                 level,
                 context_type,
                 tags,
+                read_content,
                 ctx,
             )
             .await
@@ -3565,6 +3573,7 @@ async fn main() {
             level,
             context_type,
             tags,
+            read_content,
         } => {
             handlers::handle_search(
                 query,
@@ -3578,6 +3587,7 @@ async fn main() {
                 level,
                 context_type,
                 tags,
+                read_content,
                 ctx,
             )
             .await

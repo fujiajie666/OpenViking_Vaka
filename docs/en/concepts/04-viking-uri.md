@@ -46,9 +46,9 @@ each caller.
   `Invalid scope ... Must be one of:` error message never mentions it.
 - Responses always echo the expanded canonical URI, never `viking://~`, and persisted
   data (vector records, watch keys) stays canonical as well.
-- Requires an authenticated user identity. Expansion happens at the request boundary for
-  user and admin callers; root-role and unauthenticated contexts, along with places that
-  demand an already-canonical URI (internal storage paths, background tasks), reject the
+- Requires an authenticated request identity. Expansion uses that identity's effective
+  `user_id` for every request role, including root. Places that demand an already-canonical
+  URI (internal storage paths and background tasks without a request context) reject the
   alias instead of guessing a user.
 - Replaces the removed uid-less shorthand: `viking://user/<segment>/...` for `memories`,
   `resources`, `skills`, `peers`, `privacy`, and `sessions` is rejected at USER/ADMIN
@@ -313,32 +313,32 @@ parent = VikingURI(uri).parent.uri  # viking://resources/docs
 ```python
 # Search only in resources
 results = client.find(
-    "authentication",
-    target_uri="viking://resources/"
+    query="authentication",
+    target_uri="viking://resources/",
 )
 
 # Search only in your own resources
 results = client.find(
-    "private project notes",
+    query="private project notes",
     target_uri="viking://~/resources/"
 )
 
 # Search only in your own memories
 results = client.find(
-    "coding preferences",
+    query="coding preferences",
     target_uri="viking://~/memories/"
 )
 
 # Search only in your own skills
 results = client.find(
-    "web search",
+    query="web search",
     target_uri="viking://~/skills/"
 )
 
 # Search only in global agent skills
 results = client.find(
-    "web search",
-    target_uri="viking://agent/skills/"
+    query="web search",
+    target_uri="viking://agent/skills/",
 )
 ```
 
@@ -346,16 +346,16 @@ results = client.find(
 
 ```python
 # List directory
-entries = await client.ls("viking://resources/")
+entries = await client.ls(uri="viking://resources/")
 
 # Read file
-content = await client.read("viking://resources/docs/api.md")
+content = await client.read(uri="viking://resources/docs/api.md")
 
 # Get abstract
-abstract = await client.abstract("viking://resources/docs/")
+abstract = await client.abstract(uri="viking://resources/docs/")
 
 # Get overview
-overview = await client.overview("viking://resources/docs/")
+overview = await client.overview(uri="viking://resources/docs/")
 ```
 
 ## Special Files
