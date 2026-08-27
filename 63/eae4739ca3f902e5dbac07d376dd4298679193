@@ -1,0 +1,23 @@
+.github/workflows/compile-cli-release.yml
+  s_969204edff5b6d::t_0ef3eaf6240b86 150
+npm/compile-cli/package.json
+  s_969204edff5b6d::t_3af9e4248264da 33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "63eae4739ca3f902e5dbac07d376dd4298679193",
+  "prompts": {},
+  "sessions": {
+    "s_969204edff5b6d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a042a2-5efd-7aa3-bc69-a8e867ba775a",
+        "model": "unknown"
+      },
+      "human_author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
