@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 process.stderr.write(`
-@openviking-compile/cli installed.
+@openviking/compile installed.
 
 Set the API key before use:
   export OPENVIKING_API_KEY="<your-api-key>"

@@ -446,6 +446,7 @@ pub(super) async fn run() {
                 level,
                 context_type,
                 tags,
+                false, // The restricted CLI does not inline matched content in retrieval results.
                 ctx,
             )
             .await
@@ -475,6 +476,7 @@ pub(super) async fn run() {
                 level,
                 context_type,
                 tags,
+                false, // The restricted CLI does not inline matched content in retrieval results.
                 ctx,
             )
             .await
@@ -556,7 +558,10 @@ mod tests {
 
     #[test]
     fn exposes_only_retrieval_and_content_write_commands() {
-        let names = CompileCli::command()
+        let command = CompileCli::command();
+        assert_eq!(command.get_name(), "ov");
+
+        let names = command
             .get_subcommands()
             .map(|command| command.get_name().to_string())
             .collect::<Vec<_>>();

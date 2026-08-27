@@ -5,11 +5,11 @@ import { join } from "node:path";
 
 const require = createRequire(import.meta.url);
 const platforms = {
-  "darwin-arm64": "@openviking-compile/cli-darwin-arm64",
-  "darwin-x64": "@openviking-compile/cli-darwin-x64",
-  "linux-arm64": "@openviking-compile/cli-linux-arm64",
-  "linux-x64": "@openviking-compile/cli-linux-x64",
-  "win32-x64": "@openviking-compile/cli-win32-x64"
+  "darwin-arm64": "@openviking/compile-darwin-arm64",
+  "darwin-x64": "@openviking/compile-darwin-x64",
+  "linux-arm64": "@openviking/compile-linux-arm64",
+  "linux-x64": "@openviking/compile-linux-x64",
+  "win32-x64": "@openviking/compile-win32-x64"
 };
 
 const key = `${process.platform}-${process.arch}`;
