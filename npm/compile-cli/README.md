@@ -1,6 +1,6 @@
 # @openviking/compile
 
-OpenViking retrieval and content-write CLI for cloud agents. The package installs an `ov` command with seven retrieval commands plus `write`; other mutation and administration commands are not included.
+OpenViking retrieval and content-write CLI for cloud agents. The package installs an `ov` command with seven retrieval commands plus `write`; other mutation and administration commands are not included. Each included command follows the same option contract and behavior as its counterpart in `@openviking/cli`.
 
 ## Install
 

@@ -102,6 +102,16 @@ enum CompileCommand {
             value_name = "seconds"
         )]
         timeout: Option<f64>,
+        /// Comma-separated k=v retrieval tags to write with the content.
+        #[arg(long = "tags", value_delimiter = ',')]
+        tags: Vec<String>,
+        /// Tag update mode when --tags is provided.
+        #[arg(
+            long = "tag-mode",
+            default_value = "replace",
+            value_parser = ["replace", "append"]
+        )]
+        tag_mode: String,
     },
 
     /// Search file content with a regular expression.
@@ -136,6 +146,17 @@ enum CompileCommand {
             value_name = "n"
         )]
         level_limit: i32,
+        /// Comma-separated k=v retrieval tags; all tags must match.
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v")]
+        tags: Vec<String>,
+        /// Fields to include in output (currently: tags).
+        #[arg(
+            short = 'f',
+            long = "fields",
+            value_delimiter = ',',
+            value_name = "FIELDS"
+        )]
+        fields: Option<Vec<String>>,
     },
 
     /// Search file names with a glob pattern.
@@ -156,9 +177,24 @@ enum CompileCommand {
             value_name = "n"
         )]
         node_limit: i32,
+        /// Simple output with one entry per line.
+        #[arg(short, long)]
+        simple: bool,
+        /// Comma-separated k=v retrieval tags; all tags must match.
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v")]
+        tags: Vec<String>,
+        /// Comma-separated fields to display.
+        #[arg(
+            short = 'f',
+            long = "fields",
+            value_delimiter = ',',
+            value_name = "FIELDS"
+        )]
+        fields: Option<Vec<String>>,
     },
 
     /// List directory contents.
+    #[command(alias = "list")]
     Ls {
         /// Viking URI to list.
         #[arg(default_value = "viking://", value_name = "uri")]
@@ -190,6 +226,17 @@ enum CompileCommand {
             value_name = "n"
         )]
         node_limit: i32,
+        /// Comma-separated fields to display.
+        #[arg(
+            short = 'f',
+            long = "fields",
+            value_delimiter = ',',
+            value_name = "FIELDS"
+        )]
+        fields: Option<Vec<String>>,
+        /// Comma-separated k=v retrieval tags; all tags must match.
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v")]
+        tags: Vec<String>,
     },
 
     /// Print a directory tree.
@@ -226,6 +273,20 @@ enum CompileCommand {
             value_name = "n"
         )]
         level_limit: i32,
+        /// Simple path output with no tree formatting.
+        #[arg(short, long)]
+        simple: bool,
+        /// Comma-separated fields to display.
+        #[arg(
+            short = 'f',
+            long = "fields",
+            value_delimiter = ',',
+            value_name = "FIELDS"
+        )]
+        fields: Option<Vec<String>>,
+        /// Comma-separated k=v retrieval tags; all tags must match.
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v")]
+        tags: Vec<String>,
     },
 
     /// Run semantic retrieval.
@@ -272,6 +333,9 @@ enum CompileCommand {
         /// Only include results matching all tags.
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Option<Vec<String>>,
+        /// Include the full visible content for every matched URI.
+        #[arg(long)]
+        read_content: bool,
     },
 
     /// Run context-aware retrieval.
@@ -321,6 +385,9 @@ enum CompileCommand {
         /// Only include results matching all tags.
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Option<Vec<String>>,
+        /// Include the full visible content for every matched URI.
+        #[arg(long)]
+        read_content: bool,
     },
 }
 
@@ -364,6 +431,8 @@ pub(super) async fn run() {
             wait,
             processing_mode,
             timeout,
+            tags,
+            tag_mode,
         } => {
             let effective_mode = if let Some(mode) = mode {
                 mode
@@ -380,6 +449,8 @@ pub(super) async fn run() {
                 wait,
                 timeout,
                 processing_mode,
+                tags,
+                tag_mode,
                 ctx,
             )
             .await
@@ -391,6 +462,8 @@ pub(super) async fn run() {
             ignore_case,
             node_limit,
             level_limit,
+            tags,
+            fields,
         } => {
             handlers::handle_grep(
                 uri,
@@ -399,6 +472,8 @@ pub(super) async fn run() {
                 ignore_case,
                 node_limit,
                 level_limit,
+                tags,
+                fields,
                 ctx,
             )
             .await
@@ -407,7 +482,10 @@ pub(super) async fn run() {
             pattern,
             uri,
             node_limit,
-        } => handlers::handle_glob(pattern, uri, node_limit, ctx).await,
+            simple,
+            tags,
+            fields,
+        } => handlers::handle_glob(pattern, uri, node_limit, simple, fields, tags, ctx).await,
         CompileCommand::Ls {
             uri,
             simple,
@@ -415,14 +493,37 @@ pub(super) async fn run() {
             abs_limit,
             all,
             node_limit,
-        } => handlers::handle_ls(uri, simple, recursive, abs_limit, all, node_limit, ctx).await,
+            fields,
+            tags,
+        } => {
+            handlers::handle_ls(
+                uri, simple, recursive, abs_limit, all, node_limit, fields, tags, ctx,
+            )
+            .await
+        }
         CompileCommand::Tree {
             uri,
             abs_limit,
             all,
             node_limit,
             level_limit,
-        } => handlers::handle_tree(uri, abs_limit, all, node_limit, level_limit, ctx).await,
+            simple,
+            fields,
+            tags,
+        } => {
+            handlers::handle_tree(
+                uri,
+                abs_limit,
+                all,
+                node_limit,
+                level_limit,
+                simple,
+                fields,
+                tags,
+                ctx,
+            )
+            .await
+        }
         CompileCommand::Find {
             query,
             image,
@@ -434,6 +535,7 @@ pub(super) async fn run() {
             level,
             context_type,
             tags,
+            read_content,
         } => {
             handlers::handle_find(
                 query,
@@ -446,7 +548,7 @@ pub(super) async fn run() {
                 level,
                 context_type,
                 tags,
-                false, // The restricted CLI does not inline matched content in retrieval results.
+                read_content,
                 ctx,
             )
             .await
@@ -463,6 +565,7 @@ pub(super) async fn run() {
             level,
             context_type,
             tags,
+            read_content,
         } => {
             handlers::handle_search(
                 query,
@@ -476,7 +579,7 @@ pub(super) async fn run() {
                 level,
                 context_type,
                 tags,
-                false, // The restricted CLI does not inline matched content in retrieval results.
+                read_content,
                 ctx,
             )
             .await
@@ -554,7 +657,62 @@ fn runtime_config(api_key: Option<String>) -> Result<Config> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::CommandFactory;
+    use clap::{Command, CommandFactory};
+
+    /// Captures the parsing behavior that must remain identical for shared CLI commands.
+    #[derive(Debug, PartialEq)]
+    struct ArgumentContract {
+        id: String,
+        short: Option<char>,
+        long: Option<String>,
+        aliases: Vec<String>,
+        value_names: Vec<String>,
+        num_args: String,
+        value_delimiter: Option<char>,
+        default_values: Vec<String>,
+        possible_values: Vec<String>,
+        action: String,
+        required: bool,
+    }
+
+    /// Returns the non-global argument contract for one subcommand in declaration order.
+    fn argument_contract(command: &Command) -> Vec<ArgumentContract> {
+        command
+            .get_arguments()
+            .filter(|argument| !argument.is_global_set())
+            .map(|argument| ArgumentContract {
+                id: argument.get_id().to_string(),
+                short: argument.get_short(),
+                long: argument.get_long().map(str::to_string),
+                aliases: argument
+                    .get_all_aliases()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+                value_names: argument
+                    .get_value_names()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+                num_args: format!("{:?}", argument.get_num_args()),
+                value_delimiter: argument.get_value_delimiter(),
+                default_values: argument
+                    .get_default_values()
+                    .iter()
+                    .map(|value| value.to_string_lossy().into_owned())
+                    .collect(),
+                possible_values: argument
+                    .get_possible_values()
+                    .iter()
+                    .map(|value| value.get_name().to_string())
+                    .collect(),
+                action: format!("{:?}", argument.get_action()),
+                required: argument.is_required_set(),
+            })
+            .collect()
+    }
 
     #[test]
     fn exposes_only_retrieval_and_content_write_commands() {
@@ -575,6 +733,47 @@ mod tests {
     }
 
     #[test]
+    fn selected_commands_match_the_full_cli_argument_contract() {
+        std::thread::Builder::new()
+            .name("compile-cli-contract".to_string())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(assert_selected_commands_match_the_full_cli)
+            .expect("contract test thread must start")
+            .join()
+            .expect("contract test thread must complete");
+    }
+
+    /// Compares selected subcommands on a larger stack because the full Clap tree is deeply nested.
+    fn assert_selected_commands_match_the_full_cli() {
+        let full_cli = crate::Cli::command();
+        let compile_cli = CompileCli::command();
+
+        for name in [
+            "read", "write", "grep", "glob", "ls", "tree", "find", "search",
+        ] {
+            let full_command = full_cli
+                .get_subcommands()
+                .find(|command| command.get_name() == name)
+                .expect("selected command must exist in the full CLI");
+            let compile_command = compile_cli
+                .get_subcommands()
+                .find(|command| command.get_name() == name)
+                .expect("selected command must exist in the compile CLI");
+
+            assert_eq!(
+                argument_contract(compile_command),
+                argument_contract(full_command),
+                "argument contract differs for {name}"
+            );
+            assert_eq!(
+                compile_command.get_all_aliases().collect::<Vec<_>>(),
+                full_command.get_all_aliases().collect::<Vec<_>>(),
+                "aliases differ for {name}"
+            );
+        }
+    }
+
+    #[test]
     fn parses_the_full_write_command_contract() {
         let cli = CompileCli::try_parse_from([
             "ov",
@@ -589,6 +788,10 @@ mod tests {
             "vectors_only",
             "--timeout",
             "12.5",
+            "--tags",
+            "env=prod,team=search",
+            "--tag-mode",
+            "append",
         ])
         .expect("write command should parse");
 
@@ -602,6 +805,8 @@ mod tests {
                 wait,
                 processing_mode,
                 timeout,
+                tags,
+                tag_mode,
             } => {
                 assert_eq!(uri, "viking://resources/a.md");
                 assert_eq!(content.as_deref(), Some("hello"));
@@ -611,6 +816,8 @@ mod tests {
                 assert!(wait);
                 assert_eq!(processing_mode, "vectors_only");
                 assert_eq!(timeout, Some(12.5));
+                assert_eq!(tags, ["env=prod", "team=search"]);
+                assert_eq!(tag_mode, "append");
             }
             _ => panic!("expected write command"),
         }
@@ -620,7 +827,7 @@ mod tests {
     fn rejects_other_mutating_and_administration_commands() {
         assert!(CompileCli::try_parse_from(["ov", "rm", "viking://resources/a"]).is_err());
         assert!(CompileCli::try_parse_from(["ov", "config"]).is_err());
-        assert!(CompileCli::try_parse_from(["ov", "list"]).is_err());
+        assert!(CompileCli::try_parse_from(["ov", "mv", "a", "b"]).is_err());
     }
 
     #[test]
