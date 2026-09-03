@@ -639,7 +639,9 @@ class EmbeddingConfig(BaseModel):
     )
 
     max_concurrent: int = Field(
-        default=10, description="Maximum number of concurrent embedding requests"
+        default=10,
+        ge=1,
+        description="Maximum number of concurrent embedding requests",
     )
     max_retries: int = Field(
         default=3,
@@ -994,6 +996,10 @@ class EmbeddingConfig(BaseModel):
             )
 
         embedder_class, param_builder = factory_registry[key]
+        if embedder_class is None and key == ("gemini", "dense"):
+            raise ValueError(
+                "google-genai is not installed. Install it with: pip install openviking[gemini]"
+            )
         params = param_builder(config)
         return embedder_class(**params)
 
