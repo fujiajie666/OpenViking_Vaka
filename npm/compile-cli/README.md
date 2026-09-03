@@ -28,13 +28,24 @@ the environment and replace it at the network egress. The native CLI trusts
 both Mozilla public roots and certificates installed in the operating
 system's trust store, including sandbox egress gateway CAs.
 
-The API endpoint is compiled into the binary and cannot be overridden:
+The API endpoint defaults to:
 
 ```text
 https://api.vikingdb.cn-beijing.volces.com/openviking
 ```
 
-The CLI does not read `~/.openviking/ovcli.conf` or `OPENVIKING_CLI_CONFIG_FILE`.
+To use another OpenViking data-plane endpoint, write its URL to
+`~/.openviking/ovcli.conf`:
+
+```json
+{
+  "url": "https://openviking.example.com/openviking"
+}
+```
+
+Only the URL is read from this file. Authentication still comes exclusively
+from `OPENVIKING_API_KEY`; credentials in `ovcli.conf` are ignored. Set
+`OPENVIKING_CLI_CONFIG_FILE` to select a different config file.
 
 ## Commands
 
