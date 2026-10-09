@@ -295,23 +295,27 @@ class MemoryStore:
         preference_full_limit: int = 0,
         include_uri_entries: bool = True,
         read_content: Any | None = None,
+        strict_char_budget: bool = False,
     ) -> str:
-        """Parse viking memory with score filtering and character limit.
-        Automatically reads full content for memories that fit the relevant budget;
-        memories beyond budget are kept as URI-only entries when include_uri_entries is true.
+        """Format score-filtered memories using full content, event summaries, or URIs.
+        Strict budgets charge all entries and group framing; an event whose summary
+        does not fit is omitted. Without strict budgets, only full entries are charged.
 
         Args:
             result: Memory search results
             client: VikingClient instance to read content
-            min_score: Minimum score threshold (default: 0.4)
-            max_chars: Maximum character limit for full memories in global mode
+            min_score: Minimum score threshold (default: 0.3)
+            max_chars: Character budget for full entries, or all rendered groups in strict mode
             full_limit: Number of top memories allowed to use full content in global mode
             type_char_budgets: Per-memory-type character budgets for type_quota recall
             preference_full_limit: Number of preference memories forced full in type_quota mode
-            include_uri_entries: Whether to keep URI-only candidates after content budgets are exhausted
+            include_uri_entries: Whether to allow URI-only candidates; strict mode requires budget
+            read_content: Optional async reader accepting a URI and level="read"
+            strict_char_budget: Whether every rendered character consumes total and type budgets
 
         Returns:
-            Formatted memory string within character limit
+            Grouped memory string, or empty when no entries fit. Only strict mode
+            guarantees the rendered string fits max_chars.
         """
         if not result or len(result) == 0:
             return ""
@@ -332,6 +336,26 @@ class MemoryStore:
         seen_content_hashes = set()
         full_limit = len(filtered_memories) if full_limit is None else max(0, full_limit)
         type_char_budgets = type_char_budgets or {}
+
+        def append_with_budget(memory_type: str, entry: str) -> bool:
+            """Accept a rendered entry only if its framing fits both budgets; rejection changes neither."""
+            nonlocal total_chars
+            new_group = memory_type not in grouped_memories
+            added_chars = (
+                len(self._format_memory_group(memory_type, [entry]))
+                if new_group
+                else len(entry) + 1
+            )
+            separator_chars = int(new_group and bool(grouped_memories))
+            if total_chars + added_chars + separator_chars > max_chars:
+                return False
+            if use_type_budgets and memory_type in type_char_budgets:
+                if type_chars[memory_type] + added_chars > max(0, int(type_char_budgets[memory_type])):
+                    return False
+            grouped_memories.setdefault(memory_type, []).append(entry)
+            type_chars[memory_type] = type_chars.get(memory_type, 0) + added_chars
+            total_chars += added_chars + separator_chars
+            return True
 
         for idx, memory in enumerate(filtered_memories, start=1):
             uri = self._get_uri(memory)
@@ -361,6 +385,25 @@ class MemoryStore:
                 continue
             if content_to_hash:
                 seen_content_hashes.add(content_hash)
+
+            if strict_char_budget:
+                if should_try_full and content:
+                    if use_type_budgets and memory_type == "preferences":
+                        preference_full_count += 1
+                    if append_with_budget(
+                        memory_type, self._format_full_memory(idx, uri, score, content)
+                    ):
+                        continue
+                if use_type_budgets and memory_type == "events" and content:
+                    summary = self._extract_event_summary(content, fallback=abstract)
+                    if summary:
+                        append_with_budget(
+                            memory_type, self._format_summary_memory(idx, uri, score, summary)
+                        )
+                        continue
+                if include_uri_entries:
+                    append_with_budget(memory_type, self._format_uri_memory(idx, uri, score))
+                continue
 
             if should_try_full and content:
                 full_memory_str = self._format_full_memory(idx, uri, score, content)
@@ -634,20 +677,29 @@ class MemoryStore:
                 memory_list.append(f"{i},{uri},{score}")
             raw_memories_log = "\n".join(memory_list)
             logger.info(f"[RAW_MEMORIES]\n{raw_memories_log}")
+            strict_char_budget = getattr(ov_cfg, "memory_recall_strict_char_budget", False)
+            memory_prefix = "### user memories:\n"
             user_memory = await self._parse_viking_memory(
                 result,
                 client,
                 min_score=0.1,
-                max_chars=recall_max_chars,
+                max_chars=(
+                    max(0, recall_max_chars - len(memory_prefix))
+                    if strict_char_budget
+                    else recall_max_chars
+                ),
                 full_limit=0 if use_type_quota else None,
                 type_char_budgets=(
                     self._type_quota_char_budgets(recall_max_chars) if use_type_quota else None
                 ),
                 preference_full_limit=(_TYPE_QUOTA_PREFERENCE_FULL_LIMIT if use_type_quota else 0),
-                include_uri_entries=True,
+                include_uri_entries=getattr(ov_cfg, "memory_recall_include_uri_entries", True),
                 read_content=read_memory_content,
+                strict_char_budget=strict_char_budget,
             )
-            return f"### user memories:\n{user_memory}"
+            if strict_char_budget and not user_memory:
+                return ""
+            return f"{memory_prefix}{user_memory}"
         except Exception as e:
             logger.error(f"[READ_USER_MEMORY]: search error. {e}")
             return ""

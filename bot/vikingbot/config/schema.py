@@ -618,6 +618,21 @@ class OpenVikingConfig(BaseModel):
     memory_recall_entities_limit: int = 10
     memory_recall_preferences_limit: int = 3
     memory_recall_max_chars: int = 4000
+    memory_recall_strict_char_budget: bool = Field(
+        default=False,
+        description=(
+            "Count full memories, summaries, URI-only entries, and framing against "
+            "automatic user/peer recall budgets. Events whose summary does not fit "
+            "are omitted without URI fallback."
+        ),
+    )
+    memory_recall_include_uri_entries: bool = Field(
+        default=True,
+        description=(
+            "Include URI-only candidates in automatic user/peer memory recall. "
+            "False omits these entries while retaining full memories and event summaries."
+        ),
+    )
     # How many experience memories to fetch per call to get_viking_experience_context.
     exp_recall_limit: int = 5
     # Also search matching structured case memories. When enabled, VikingBot
