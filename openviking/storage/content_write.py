@@ -209,13 +209,16 @@ class ContentWriteCoordinator:
         self._privacy_sanitizer = privacy_sanitizer
         self._content_commit = commit_content
 
-    async def _commit_content(self, uris: list[str], lease: Any, write=None) -> Any:
+    async def _commit_content(
+        self, uris: list[str], lease: Any, write=None, *, snapshot_id: str | None = None
+    ) -> Any:
         """Write bytes and managed versions under the lease before refresh.
 
         Return ``write()``'s result; batches omit it because bytes are already written.
         """
         if self._content_commit is not None:
-            return await self._content_commit(uris, lease_ref=lease, write=write)
+            kwargs = {"snapshot_id": snapshot_id} if snapshot_id is not None else {}
+            return await self._content_commit(uris, lease_ref=lease, write=write, **kwargs)
         return await write() if write is not None else None
 
     async def _sanitize_text(
@@ -372,6 +375,7 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         wait: bool = True,
         skip_conflicts: bool = False,
+        commit_folder: bool = False,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     ) -> Dict[str, Any]:
         async def execute() -> Dict[str, Any]:
@@ -381,6 +385,7 @@ class ContentWriteCoordinator:
                 ctx=ctx,
                 wait=wait,
                 skip_conflicts=skip_conflicts,
+                commit_folder=commit_folder,
                 processing_mode=processing_mode,
             )
 
@@ -402,19 +407,16 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         wait: bool = True,
         skip_conflicts: bool = False,
+        commit_folder: bool = False,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     ) -> Dict[str, Any]:
-        """Write a bundle under one directory, then refresh it as a batch.
+        """Write a bundle, optionally snapshot root_uri, then enqueue shared refresh.
 
-        Each operation follows the same create/replace/append semantics as ``write``;
-        ``upsert`` is available for callers that already hold the desired final tree.
-        All target files stay locked from state validation through the last write,
-        while unrelated files remain writable. Refresh starts after the locks are released.
-        Derived summaries are generated once per batch. Operation count and content size have
-        no application-level quotas; all operations undergo access and path validation.
-        With skip_conflicts, changed, missing or occupied targets are returned in
-        conflicts and left untouched; compatible files still commit under the same locks.
-        Permission, transport and write failures remain errors, not skipped conflicts.
+        Target files stay locked through refresh. commit_folder protects the directory
+        until its snapshot is saved; refresh retains only the file locks.
+        Return per-file outcomes and, with commit_folder, commit_oid (None if Git is disabled).
+        skip_conflicts leaves conflicting targets untouched; permission, transport
+        and write failures remain errors.
         """
         normalized_root = self._validate_uri_path(root_uri, field_name="root_uri")
         processing_mode = normalize_processing_mode(processing_mode)
@@ -429,7 +431,18 @@ class ContentWriteCoordinator:
             for operation in normalized_operations
         ]
         try:
-            lease = await self._viking_fs._async_agfs.pathlock_acquire_exact_batch(target_paths)
+            if commit_folder:
+                from openviking.service.compile_targets import (
+                    SNAPSHOT_BUSY_SECONDS,
+                    commit_snapshot,
+                )
+
+                lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
+                    self._viking_fs._uri_to_path(normalized_root, ctx=ctx),
+                    timeout_secs=SNAPSHOT_BUSY_SECONDS,
+                )
+            else:
+                lease = await self._viking_fs._async_agfs.pathlock_acquire_exact_batch(target_paths)
         except LockAcquisitionError as exc:
             raise ResourceBusyError(
                 f"resource is busy and cannot be written now: {normalized_root}",
@@ -566,7 +579,28 @@ class ContentWriteCoordinator:
                     created.append(uri)
                     if prepared is None:
                         refresh_kinds[uri] = "added"
-            await self._commit_content([*created, *updated], lease)
+            commit_oid = None
+            if commit_folder and write_error is None:
+                commit_oid = await commit_snapshot(
+                    self._viking_fs,
+                    [normalized_root],
+                    f"batch write {normalized_root}",
+                    ctx,
+                    lease_ref=lease,
+                )
+            if not commit_folder or write_error is not None or commit_oid is not None:
+                await self._commit_content([*created, *updated], lease, snapshot_id=commit_oid)
+            if commit_folder:
+                # Refresh retains file locks without blocking the entire directory.
+                file_lease = await self._viking_fs._async_agfs.pathlock_acquire_exact_batch(
+                    target_paths, owner_lease_ref=lease
+                )
+                try:
+                    await self._viking_fs._async_agfs.pathlock_release(lease)
+                except BaseException:
+                    await self._viking_fs._async_agfs.pathlock_release(file_lease)
+                    raise
+                lease = file_lease
         except BaseException:
             await self._viking_fs._async_agfs.pathlock_release(lease)
             lock_settled = True
@@ -745,6 +779,8 @@ class ContentWriteCoordinator:
         }
         if skip_conflicts:
             result["conflicts"] = conflicts
+        if commit_folder:
+            result["commit_oid"] = commit_oid
         if refresh_outcome is not None:
             semantic_status, vector_status = refresh_outcome.statuses(wait=wait)
             result["semantic_status"] = semantic_status
