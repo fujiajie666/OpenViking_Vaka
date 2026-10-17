@@ -1,4 +1,5 @@
-//! Run each override in its own process: never mutate the test runner's environment.
+//! Full CLI profile overrides run in separate processes without mutating the test runner environment.
+#![cfg(not(feature = "compile-cli"))]
 use serde_json::{Value, json};
 use std::{
     fs,
