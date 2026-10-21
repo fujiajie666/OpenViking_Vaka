@@ -633,6 +633,7 @@ class OpenVikingService:
         compile_config = self._config.compile_api
         compile_store = CompileStateStore(self._agfs_client)
         self._compile_service.configure_lifecycle(CompileLifecycle(compile_store, self._viking_fs))
+        get_task_tracker().compile_history_cleanup = compile_store.delete_expired
         if compile_config.scheduler_enabled:
             self._compile_scheduler = CompileScheduler(
                 self._compile_service,

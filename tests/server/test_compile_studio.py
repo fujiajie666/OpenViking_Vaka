@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.service.compile_targets import new_operation
 from openviking.service.external_task_service import ExternalTaskService
 from openviking.service.task_domain import TaskPatch
 from openviking.service.task_pagination import decode_cursor, encode_cursor, page_scope
@@ -358,6 +359,14 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
         ctx=ctx,
         defer_processing=True,
     )
+    state = await store.get_by_to(ctx.account_id, target)
+    target_id = state["id"]
+    indexes = await store.list_version_indexes(ctx.account_id, target_id)
+    assert tracker.compile_history_cleanup == store.delete_expired
+    assert await store.delete_expired(now=time.time() + 604801, limit=256) > 0
+    assert await store.get(ctx.account_id, target_id) == state
+    assert await store.list_version_indexes(ctx.account_id, target_id) == indexes
+    assert await tracker.get(first, **owner) is not None
     versions = (await client.get("/api/v1/snapshot/versions", params={"uri": picture})).json()[
         "result"
     ]
@@ -448,7 +457,9 @@ async def test_cursor_prunes_cold_expired_records_without_loading_cache():
         agfs.files[path] = json.dumps(payload).encode()
     store = PersistentTaskStore(agfs)
     tracker = TaskTracker(store)
+    tracker.compile_history_cleanup = AsyncMock(side_effect=OSError("history cleanup"))
     await tracker.delete_expired()
+    tracker.compile_history_cleanup.assert_awaited_once()
     page = await asyncio.wait_for(
         tracker.list_tasks(
             **owner,
@@ -500,3 +511,45 @@ async def test_cursor_cleanup_rechecks_task_updated_after_scan():
     )
     assert [record.task_id for record in page] == [task.task_id]
     assert await store.get_task(task.task_id, **owner) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_dir", ["operation_outputs", "operations"])
+async def test_compile_history_retention_and_retry(service, monkeypatch, failed_dir):
+    store = service.compile.lifecycle.store
+    account = service.user.account_id
+    target = await store.register(account, "viking://resources/history")
+    now = time.time()
+    for operation_id, status, finished_at in (
+        ("expired", "completed", now - 604801),
+        ("boundary", "failed", now - 604800),
+        ("missing", "cancelled", None),
+        ("running", "running", now - 604801),
+    ):
+        operation = new_operation(operation_id, "restore", {}, "user", status=status)
+        operation["finished_at"] = finished_at
+        await store.merge_outputs(account, target, operation_id, [])
+        await store.put_operation(account, target, operation)
+    async with store.edit(account, target) as record:
+        record["active_task_id"] = "running-task"
+    assert await store.delete_expired(now=now, limit=256) == 0
+    async with store.edit(account, target) as record:
+        record["active_task_id"] = None
+    remove = store.remove
+
+    async def fail_remove(path, **kwargs):
+        if path.endswith(f"/{failed_dir}/expired.json"):
+            raise OSError("history deletion failed")
+        await remove(path, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "remove", fail_remove)
+        assert await store.delete_expired(now=now, limit=256) == 0
+    assert await store.get_operation(account, target, "expired") is not None
+    for _ in range(4):
+        await store.delete_expired(now=now, limit=2)
+    assert await store.get_operation(account, target, "expired") is None
+    assert await store.get_outputs(account, target, "expired") is None
+    for operation_id in ("boundary", "missing", "running"):
+        assert await store.get_operation(account, target, operation_id) is not None
+        assert await store.get_outputs(account, target, operation_id) is not None

@@ -23,6 +23,7 @@ import asyncio
 import hashlib
 import heapq
 import json
+import math
 import random
 import sys
 import time
@@ -58,7 +59,7 @@ from openviking.pyagfs.exceptions import (
 from openviking.resource.uri_mutation_coordinator import uri_matches_prefix
 from openviking.server.identity import RequestContext, Role
 from openviking.service.external_task_service import ExternalTaskSnapshot
-from openviking.service.task_tracker_concurrency import run_to_completion
+from openviking.service.task_tracker_concurrency import KeyedAsyncLockPool, run_to_completion
 from openviking.storage.acl import AclAction
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.viking_fs._base import LS_ALL_NODES
@@ -83,6 +84,7 @@ _operation_outputs: ContextVar[Optional[dict]] = ContextVar("operation_outputs",
 
 
 LOCK_TIMEOUT_SECONDS = 30.0
+HISTORY_RETENTION_SECONDS = 7 * 24 * 3600
 SUMMARY_FIELDS = (
     "id",
     "to",
@@ -220,6 +222,8 @@ class CompileStateStore:
 
     def __init__(self, agfs: Any) -> None:
         self._agfs = agfs if isinstance(agfs, AsyncAGFSClient) else AsyncAGFSClient(agfs)
+        self._cleanup_locks = KeyedAsyncLockPool()
+        self._cleanup_scan: Optional[AsyncIterator[Optional[tuple[str, str, str]]]] = None
 
     # ---------- paths ----------
 
@@ -470,11 +474,102 @@ class CompileStateStore:
             if str(entry.get("name") or "").endswith(".json")
         ]
 
-    async def remove(self, path: str, *, recursive: bool = False) -> None:
+    async def remove(self, path: str, *, recursive: bool = False, lease: Any = None) -> None:
+        """Remove a path idempotently, reusing the caller's covering lease when supplied."""
+        fs_ctx = fs_ctx_from_agfs_path(path)
+        if lease is not None:
+            fs_ctx["lease_ref"] = lease["lease_ref"]
         try:
-            await self._agfs.rm(path, recursive=recursive)
+            await self._agfs.rm(path, recursive=recursive, fs_ctx=fs_ctx)
         except (AGFSNotFoundError, FileNotFoundError):
             pass
+
+    async def _iter_history(self) -> AsyncIterator[Optional[tuple[str, str, str]]]:
+        """Yield history IDs without locks; account and target visits also consume the batch."""
+        for account_id in await self.list_accounts():
+            yield None
+            try:
+                targets = await self.list_summaries(account_id)
+            except Exception:
+                logger.exception("Cannot scan Compile history for account %s", account_id)
+                continue
+            for target in targets:
+                yield None
+                target_id = target["id"]
+                try:
+                    record = await self.get(account_id, target_id)
+                    if record is None or record.get("active_task_id"):
+                        continue
+                    names = await self.list_dir(
+                        f"{self._target_dir(account_id, target_id)}/operations"
+                    )
+                except Exception:
+                    logger.exception("Cannot scan Compile history for %s/%s", account_id, target_id)
+                    continue
+                for name in names:
+                    yield account_id, target_id, name[:-5]
+
+    async def delete_expired(self, *, now: float, limit: int) -> int:
+        """Scan at most ``limit`` visits and return the number of expired operations removed.
+
+        ``now`` is Unix seconds. Scans resume across calls; failed records remain for
+        the next pass. Only history JSON is removed; target state and versions stay.
+        """
+        if limit <= 0:
+            return 0
+        deleted = 0
+        async with self._cleanup_locks.acquire("scan"):
+            if self._cleanup_scan is None:
+                self._cleanup_scan = self._iter_history()
+            for _ in range(limit):
+                try:
+                    candidate = await anext(self._cleanup_scan)
+                except StopAsyncIteration:
+                    self._cleanup_scan = None
+                    break
+                except Exception:
+                    self._cleanup_scan = None
+                    logger.exception("Cannot enumerate Compile history")
+                    break
+                if candidate is None:
+                    continue
+                try:
+                    deleted += await self._delete_expired_operation(
+                        *candidate, cutoff=now - HISTORY_RETENTION_SECONDS
+                    )
+                except Exception:
+                    logger.exception("Cannot clean Compile history %s/%s/%s", *candidate)
+        return deleted
+
+    async def _delete_expired_operation(
+        self, account_id: str, target_id: str, operation_id: str, *, cutoff: float
+    ) -> bool:
+        """Return whether a terminal history pair older than Unix ``cutoff`` is removed."""
+        operation_path = self._operation_path(account_id, target_id, operation_id)
+        async with self.lock_operation(account_id, target_id, operation_id, "finish"):
+            async with self.locked(self._record_path(account_id, target_id)):
+                record = await self.get(account_id, target_id)
+                if record is None or record.get("active_task_id"):
+                    return False
+                async with self.locked(operation_path) as operation_lease:
+                    operation = await self.get_operation(account_id, target_id, operation_id)
+                    finished_at = (operation or {}).get("finished_at")
+                    if (
+                        not operation
+                        or operation.get("operation_id") != operation_id
+                        or operation.get("status") not in TERMINAL
+                        or isinstance(finished_at, bool)
+                        or not isinstance(finished_at, (int, float))
+                        or not math.isfinite(finished_at)
+                        or finished_at < 0
+                        or finished_at >= cutoff
+                    ):
+                        return False
+                    outputs_path = self._outputs_path(account_id, target_id, operation_id)
+                    async with self.locked(outputs_path) as outputs_lease:
+                        await self.remove(outputs_path, lease=outputs_lease)
+                    await self.remove(operation_path, lease=operation_lease)
+                    return True
 
     async def list_operations(
         self,

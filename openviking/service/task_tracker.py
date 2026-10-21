@@ -288,6 +288,8 @@ class TaskTracker:
     def __init__(self, store: TaskWorkStore) -> None:
         self._store = store
         self._cleanup_task: Optional[asyncio.Task[Any]] = None
+        # Bound after Compile storage initialization; shares the cleanup clock and batch size.
+        self.compile_history_cleanup: Optional[Callable[..., Awaitable[int]]] = None
         self._cancel_poll_task: Optional[asyncio.Task[Any]] = None
         self._work_index = TaskWorkIndex()
         self._running: ContextVar[tuple[str, str, str, bool] | None] = ContextVar(
@@ -377,9 +379,15 @@ class TaskTracker:
                 logger.exception("[TaskTracker] cancel-poll error")
 
     async def delete_expired(self) -> DeleteExpiredResult:
+        now = time.time()
+        if self.compile_history_cleanup is not None:
+            try:
+                await self.compile_history_cleanup(now=now, limit=self.CLEANUP_BATCH)
+            except Exception:
+                logger.exception("[TaskTracker] Compile history cleanup error")
         result = await self._store.delete_expired(
             TaskRetentionPolicy(self.TTL_COMPLETED, self.TTL_FAILED),
-            now=time.time(),
+            now=now,
             limit=self.CLEANUP_BATCH,
         )
         for deleted in result.deleted:
