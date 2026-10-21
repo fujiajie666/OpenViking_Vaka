@@ -74,7 +74,13 @@ async def run(runtime, sources, context):
                 {
                     **result,
                     "inputs": [
-                        await payload(runtime, record)
+                        {
+                            "id": record.record_id,
+                            "payload": {
+                                "uri": runtime.evidence[record.record_id]["uri"],
+                                "change_type": "deleted",
+                            },
+                        }
                         for record in sources
                         if runtime.evidence[record.record_id].get("change_type") == "deleted"
                         and runtime.evidence[record.record_id]["uri"] in deleted_uris
@@ -94,7 +100,8 @@ async def run(runtime, sources, context):
             "In incremental mode the query lists changes, not the full source inventory. "
             "Absence from its results is not deletion: preserve existing facts and citations "
             "from unchanged sources. Prefer patches affecting only changed facts. "
-            "Deletion-query inputs are notices: revise only content derived from those sources. "
+            "Deletion-query inputs identify deleted sources, not source bodies or evidence for new facts. "
+            "Use their IDs to support revisions to derived content; preserve other sources and manual edits. "
             "Handle all changes and retry failed queries/reads; failures are not empty results. "
             "If no outputs need modification, submit files=[] with no_changes_reason. "
             "Before requesting needs_pipeline=true, query all pages and read the source ranges "
