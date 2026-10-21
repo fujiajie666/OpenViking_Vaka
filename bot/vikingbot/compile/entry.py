@@ -42,12 +42,13 @@ For local updates, read relevant ranges and use patches; read complete files bef
 If the task needs unavailable tools, staged processing or large outputs,
 return needs_pipeline=true and files=[].
 Do not omit required content to fit a direct submission.
+Before submitting, review the generated files and batch-fix any errors.
 """
 
 
 async def run(runtime, sources, context):
     """Generate files from seeded sources and Skill/request context using the task runtime.
-    Return accepted staging references, or None for planning; structure errors allow three repairs.
+    Return accepted staging references, or None for planning when direct generation fails.
     Existing files require a target read and matching revision; storage errors propagate.
     """
     system = _PROMPT + runtime.output_instructions
@@ -186,7 +187,7 @@ async def run(runtime, sources, context):
             readers[read.name].execute = read_target
 
     async def validate(response):
-        """Check only file structure and provenance, without a separate semantic review."""
+        """Check delivery structure, file bodies and revisions without validating input IDs."""
         if response.needs_pipeline:
             if response.files:
                 raise ValueError("A pipeline request must not submit files")

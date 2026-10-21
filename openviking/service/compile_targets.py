@@ -1574,6 +1574,7 @@ def _params(request: Mapping[str, Any]) -> Dict[str, Any]:
     meta = request["compile"]
     return {
         "from": request["from"],
+        "to": request["to"],
         "skill": request["skill"],
         "instruction": request.get("instruction"),
         "args": {"mode": meta["mode"], **(request.get("args") or {})},
@@ -1746,6 +1747,8 @@ class CompileVersions:
                         scoped_params[key] = value
                     elif isinstance(value, str) and recursive and uri_matches_prefix(to, value):
                         scoped_params[key] = to
+                if operation_type in {"cp", "mv"} and "to" in params:
+                    scoped_params["to"] = params["to"]
                 entries.append(
                     (
                         target,
