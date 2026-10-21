@@ -128,7 +128,7 @@ The update body requires `to`, `from` (a non-empty source URI array), `skill`, `
 
 Scheduled updates require `compile_api.scheduler_enabled=true` (default `false`) and valid `expiry.service_name` and `expiry.redis` configuration. `compile_api.scheduler_backend` only accepts `redis` (the default); `local` is invalid. Enabling `auto_update` while scheduling is disabled returns `COMPILE_SCHEDULER_DISABLED`. Manual incremental Compile and version management do not require Redis.
 
-Both history endpoints accept optional query parameters `limit` (1–100, default 20) and `cursor`. Pass the returned `next_cursor` unchanged; `null` marks the last page. `operation_id` is 1–128 characters, starts with a letter or digit, and otherwise allows letters, digits, `:`, `.`, `_`, and `-`. Operations remain queryable after target deletion. Missing targets, operations, or output manifests return `404`; an output result with `versions_available: false` indicates that frozen versions are unavailable.
+Both history endpoints accept optional query parameters `limit` (1–100, default 20) and `cursor`. Pass the returned `next_cursor` unchanged; `null` marks the last page. `operation_id` is 1–128 characters, starts with a letter or digit, and otherwise allows letters, digits, `:`, `.`, `_`, and `-`. Operations remain queryable after target deletion. Missing targets, operations, or output manifests return `404`. A null `version_id` or `snapshot_id` on an output item indicates that the corresponding reference is unavailable.
 
 ### Check Compile availability
 

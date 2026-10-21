@@ -727,10 +727,7 @@ class CompileService:
         if cursor:
             outputs = [item for item in outputs if item["uri"] > cursor]
         page = outputs[:limit]
-        result = {"outputs": page, "next_cursor": page[-1]["uri"] if len(outputs) > limit else None}
-        if manifest.get("versions_available") is False:
-            result["versions_available"] = False
-        return result
+        return {"outputs": page, "next_cursor": page[-1]["uri"] if len(outputs) > limit else None}
 
     async def file_versions(
         self, uri: str, ctx: RequestContext, *, limit: int, before: str | None

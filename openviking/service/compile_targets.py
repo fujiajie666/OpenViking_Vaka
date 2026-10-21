@@ -197,7 +197,6 @@ class CompileStore(Protocol):
         operation_id: str,
         outputs: List[dict],
         *,
-        versions_available: bool = True,
         effects: Optional[List[dict]] = None,
         ordinary_operation: Optional[str] = None,
         metadata_lease: Any = None,
@@ -443,7 +442,6 @@ class CompileStateStore:
         operation_id: str,
         outputs: List[dict],
         *,
-        versions_available: bool = True,
         effects: Optional[List[dict]] = None,
         ordinary_operation: Optional[str] = None,
         metadata_lease: Any = None,
@@ -461,8 +459,6 @@ class CompileStateStore:
             merged = {item["uri"]: item for item in data["outputs"]}
             merged.update((item["uri"], item) for item in outputs)
             data["outputs"] = [merged[uri] for uri in sorted(merged)]
-            if not versions_available or any(item["snapshot_id"] is None for item in outputs):
-                data["versions_available"] = False
             if effects is not None:
                 paths = data.setdefault("effects", [])
                 paths.extend(effect for effect in effects if effect not in paths)
@@ -2105,9 +2101,7 @@ class CompileVersions:
         incremental runs extend the latest version's provenance with changed roots.
         """
         if not head:
-            await self._store.merge_outputs(
-                account_id, record["id"], run["operation_id"], [], versions_available=False
-            )
+            await self._store.merge_outputs(account_id, record["id"], run["operation_id"], [])
             return
         run_meta = run["meta"]
         indexes = {index["uri"]: index for index in await self._indexes(account_id, record["id"])}
@@ -2322,7 +2316,6 @@ class CompileVersions:
                                 {"uri": uri, "version_id": None, "snapshot_id": None}
                                 for uri in targets
                             ],
-                            versions_available=False,
                         )
                 else:
                     run = None

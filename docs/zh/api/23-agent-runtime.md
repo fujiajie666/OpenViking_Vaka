@@ -128,7 +128,7 @@ task, err := client.Compile(
 
 定时自动更新需要显式配置 `compile_api.scheduler_enabled=true`（默认 `false`），并提供有效的 `expiry.service_name` 和 `expiry.redis` 配置。`compile_api.scheduler_backend` 仅接受 `redis`（默认值），配置 `local` 无效。调度关闭时开启 `auto_update` 会返回 `COMPILE_SCHEDULER_DISABLED`。手动增量编译和版本管理不依赖 Redis。
 
-两个历史接口均接受可选查询参数 `limit`（1–100，默认 20）和 `cursor`。翻页时原样传入返回的 `next_cursor`，其为 `null` 时表示最后一页。`operation_id` 长度为 1–128 个字符，以字母或数字开头，其余字符允许字母、数字、`:`、`.`、`_` 和 `-`。目标删除后仍可查询操作记录。目标、操作或产出清单不存在时返回 `404`；产出结果中的 `versions_available: false` 表示冻结版本不可用。
+两个历史接口均接受可选查询参数 `limit`（1–100，默认 20）和 `cursor`。翻页时原样传入返回的 `next_cursor`，其为 `null` 时表示最后一页。`operation_id` 长度为 1–128 个字符，以字母或数字开头，其余字符允许字母、数字、`:`、`.`、`_` 和 `-`。目标删除后仍可查询操作记录。目标、操作或产出清单不存在时返回 `404`。产出项的 `version_id` 或 `snapshot_id` 为 `null` 时，表示对应引用不可用。
 
 ### 检查 Compile 可用性
 
