@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.service.compile_targets import new_operation
+from openviking.service.compile_targets import CompileLifecycle, new_operation
 from openviking.service.external_task_service import ExternalTaskService
 from openviking.service.task_domain import TaskPatch
 from openviking.service.task_pagination import decode_cursor, encode_cursor, page_scope
@@ -289,6 +289,35 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     await service.compile._tasks.execute(first, **owner)
     assert (await tracker.get(first, **owner)).status == "completed"
     assert await service.fs.read(page, ctx) == "generated"
+
+    # Interrupted finalization reuses durable checkpoints without publishing another version.
+    store = service.compile.lifecycle.store
+    target_id = (await store.get_by_to(ctx.account_id, target))["id"]
+    operation = await store.get_operation(ctx.account_id, target_id, first)
+    checkpoint = dict(operation["meta"])
+    assert checkpoint["snapshot_committed"] and checkpoint["target_head"]
+    assert checkpoint["reindex_task_id"]
+    versions_before_resume = await store.list_version_indexes(ctx.account_id, target_id)
+    operation.update(status="committing", finished_at=None)
+    await store.put_operation(ctx.account_id, target_id, operation)
+    resumed_lifecycle = CompileLifecycle(store, service.viking_fs)
+    task = await tracker.get(first, **owner)
+    reindex_requests = service.reindex.await_count
+    with monkeypatch.context() as patch:
+        patch.setattr(resumed_lifecycle, "_commit", AsyncMock())
+        patch.setattr(resumed_lifecycle.versions, "record_compile", AsyncMock())
+        resumed = await resumed_lifecycle.on_start(task)
+        assert resumed.status == "completed"
+        await resumed_lifecycle.on_finish(task, resumed)
+        resumed_lifecycle._commit.assert_not_awaited()
+        resumed_lifecycle.versions.record_compile.assert_not_awaited()
+    operation = await store.get_operation(ctx.account_id, target_id, first)
+    assert operation["status"] == "completed" and operation["finished_at"] is not None
+    assert operation["meta"] == checkpoint
+    assert service.reindex.await_count == reindex_requests + 1
+    assert service.reindex.call_args.kwargs["task_id"] == checkpoint["reindex_task_id"]
+    assert await store.list_version_indexes(ctx.account_id, target_id) == versions_before_resume
+
     recovery = await client.get("/api/v1/compile/submissions/compile-initial-key")
     assert recovery.json()["result"]["task_id"] == first
     assert isinstance((await client.get("/api/v1/tasks")).json()["result"], list)
@@ -328,7 +357,6 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     assert changes["diff_dirs"] == [source] and changes["full_dirs"] == []
     assert "scopes" not in changes
 
-    store = service.compile.lifecycle.store
     progress = (await store.get_by_to(ctx.account_id, target))["progress"]
     extra = "viking://resources/extra-source"
     await service.viking_fs.write_file(f"{extra}/a.md", "extra", ctx=admin)
@@ -347,8 +375,64 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     history = (await client.get("/api/v1/compile/operations", params={"to": target})).json()[
         "result"
     ]
-    assert all(set(op["changes"]) == {"summary"} for op in history["operations"])
-    assert next(op for op in history["operations"] if op["task_id"] == failed)["status"] == "failed"
+    public_fields = {
+        "operation_id",
+        "operation_type",
+        "actor",
+        "status",
+        "created_at",
+        "started_at",
+        "finished_at",
+        "error",
+        "params",
+        "result",
+        "conflicts_num",
+        "meta",
+    }
+    assert all(set(op) == public_fields for op in history["operations"])
+    failed_operation = next(
+        op for op in history["operations"] if op["meta"].get("task_id") == failed
+    )
+    assert failed_operation["status"] == "failed"
+    assert failed_operation["params"]["from"] == [source, extra]
+    assert failed_operation["params"]["to"] == target
+    assert failed_operation["params"]["skill"] == skill
+    assert set(failed_operation["meta"]) == {
+        "task_id",
+        "trigger",
+        "execution",
+        "skill_snapshot",
+        "base",
+        "head",
+        "changes",
+        "reindex_task_id",
+    }
+    assert set(failed_operation["meta"]["changes"]) == {"added", "modified", "deleted"}
+    target_id = (await store.get_by_to(ctx.account_id, target))["id"]
+    stored_operation = await store.get_operation(ctx.account_id, target_id, failed)
+    assert set(stored_operation) == public_fields
+    assert set(stored_operation["meta"]) - set(failed_operation["meta"]) == {
+        "target_deleted_at",
+        "target_base",
+        "target_head",
+        "snapshot_committed",
+        "content_changed",
+        "changed_roots",
+        "diff_dirs",
+        "full_dirs",
+        "rollback_head",
+    }
+    ordinary_operation = next(
+        op for op in history["operations"] if op["operation_type"] == "agent_revise"
+    )
+    assert ordinary_operation["meta"] == {}
+    assert ordinary_operation["params"] == {"batch": True, "uris": [page]}
+    assert ordinary_operation["result"] == {"created": [], "updated": [page], "unchanged": []}
+    assert ordinary_operation["conflicts_num"] == 0
+    cancelled_operation = next(
+        op for op in history["operations"] if op["operation_id"] == cancelled_id
+    )
+    assert {"execution", "skill_snapshot"}.isdisjoint(cancelled_operation["meta"])
 
     # Binary version restore is guarded by the version the caller last observed.
     await service.fs.batch_write(
@@ -410,7 +494,9 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     assert await scheduler.trigger_if_due(ctx.account_id, target_id, now) == "submitted"
     operations = await service.compile.list_operations(target, ctx, limit=20, cursor=None)
     scheduled = next(
-        op["task_id"] for op in operations["operations"] if op["trigger"] == "scheduled"
+        op["meta"]["task_id"]
+        for op in operations["operations"]
+        if op["meta"].get("trigger") == "scheduled"
     )
     await service.compile._tasks.execute(scheduled, **owner)
     assert (await tracker.get(scheduled, **owner)).status == "completed"

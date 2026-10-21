@@ -656,7 +656,11 @@ class CompileService:
     async def list_operations(
         self, to: str, ctx: RequestContext, *, limit: int, cursor: str | None
     ) -> dict[str, Any]:
-        """Return one target's newest operations, continuing after the operation-ID cursor."""
+        """Page authorized target operations with public Compile metadata only.
+
+        Common operation fields retain their stored structure. Compile checkpoints
+        remain private even when they share the persisted metadata dictionary.
+        """
         record = await self._target(to, ctx, include_deleted=True)
         operations = await self._require_lifecycle().store.list_operations(
             ctx.account_id, record["id"], limit=limit + 1, cursor=cursor
@@ -664,30 +668,36 @@ class CompileService:
         page = operations[:limit]
         public = [
             {
-                key: operation.get(key)
+                key: operation[key]
                 for key in (
                     "operation_id",
                     "operation_type",
                     "actor",
                     "created_at",
-                    "task_id",
-                    "trigger",
                     "status",
                     "started_at",
                     "finished_at",
-                    "reindex_task_id",
                     "params",
-                    "execution",
-                    "skill_snapshot",
-                    "base",
-                    "head",
                     "result",
+                    "conflicts_num",
                     "error",
                 )
             }
             | {
-                "conflicts_num": operation.get("conflicts_num", 0),
-                "changes": {"summary": (operation.get("changes") or {}).get("summary")},
+                "meta": {
+                    key: operation["meta"][key]
+                    for key in (
+                        "task_id",
+                        "trigger",
+                        "execution",
+                        "skill_snapshot",
+                        "base",
+                        "head",
+                        "changes",
+                        "reindex_task_id",
+                    )
+                    if key in operation["meta"]
+                },
             }
             for operation in page
         ]

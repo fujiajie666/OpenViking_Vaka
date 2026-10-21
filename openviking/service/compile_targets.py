@@ -770,6 +770,7 @@ def new_operation(
         "result": None,
         "conflicts_num": 0,
         "error": None,
+        "meta": {},
     }
 
 
@@ -783,19 +784,21 @@ def new_compile_operation(task: Any, record: Dict[str, Any]) -> Dict[str, Any]:
     return new_operation(
         task.task_id, operation_type, _params(request), task.user_id, status="queued"
     ) | {
-        "task_id": task.task_id,
-        "target_deleted_at": request["compile"]["deleted_at"],  # Target lifecycle boundary.
-        "trigger": trigger,
         "created_at": task.created_at,
-        "target_base": None,
-        "target_head": None,
-        "snapshot_committed": False,
-        "content_changed": False,  # Untracked output changes requiring a timestamp at finalization.
-        "reindex_task_id": None,
-        "base": None,
-        "head": None,
-        "changed_roots": [],
-        "changes": None,
+        "meta": {
+            "task_id": task.task_id,
+            "target_deleted_at": request["compile"]["deleted_at"],  # Target lifecycle boundary.
+            "trigger": trigger,
+            "target_base": None,
+            "target_head": None,
+            "snapshot_committed": False,
+            "content_changed": False,  # Untracked changes requiring a finalization timestamp.
+            "reindex_task_id": None,
+            "base": None,
+            "head": None,
+            "changed_roots": [],
+            "changes": None,
+        },
     }
 
 
@@ -1041,11 +1044,12 @@ class CompileLifecycle:
         ctx = task_ctx(task.account_id, task.user_id)
         incremental = meta["mode"] == "incremental"
         run = run or new_compile_operation(task, record)
+        run_meta = run["meta"]
         run["actor"] = task.user_id
         run["status"] = "running"
         run["started_at"] = time.time()
         async with self._locked_output(request["skill"], ctx) as lease:
-            run["skill_snapshot"] = {
+            run_meta["skill_snapshot"] = {
                 "uri": request["skill"],
                 "snapshot_id": await commit_snapshot(
                     self._fs,
@@ -1061,7 +1065,7 @@ class CompileLifecycle:
         previous_skill = progress.get("skill_snapshot") or {}
         mode = "full"
         skill_base = previous_skill.get("snapshot_id")
-        skill_head = run["skill_snapshot"]["snapshot_id"]
+        skill_head = run_meta["skill_snapshot"]["snapshot_id"]
         if (
             incremental
             and (request.get("instruction") or "").strip() == progress.get("instruction")
@@ -1079,10 +1083,10 @@ class CompileLifecycle:
             )
             if not skill_changes:
                 mode = "incremental"
-        run["execution"] = {"mode": mode}
+        run_meta["execution"] = {"mode": mode}
         paths = [request["to"], *request["from"]]
         async with self._locked_output(request["to"], ctx) as lease:
-            run["target_base"] = await commit_snapshot(
+            run_meta["target_base"] = await commit_snapshot(
                 self._fs,
                 paths,
                 f"compile {task.task_id} start",
@@ -1090,13 +1094,18 @@ class CompileLifecycle:
                 wait_busy=False,
                 lease_ref=lease,
             )
-            await self.versions.record_external(task.account_id, record, run["target_base"], ctx)
-            run.update(
+            await self.versions.record_external(
+                task.account_id, record, run_meta["target_base"], ctx
+            )
+            run_meta.update(
                 await self._plan(
-                    {} if mode == "full" else progress, request["from"], run["target_base"], ctx
+                    {} if mode == "full" else progress,
+                    request["from"],
+                    run_meta["target_base"],
+                    ctx,
                 )
             )
-            if mode == "incremental" and not run["changed_roots"] and record["initialized"]:
+            if mode == "incremental" and not run_meta["changed_roots"] and record["initialized"]:
                 run["status"] = "completed"
             await self._store.put_operation(task.account_id, meta["target_id"], run)
         return run
@@ -1126,7 +1135,7 @@ class CompileLifecycle:
             "diff_dirs": compared,
             "full_dirs": added_roots,
             "changed_roots": changed_roots,
-            "changes": {"summary": summary},
+            "changes": summary,
         }
 
     async def runtime_changes(
@@ -1137,15 +1146,16 @@ class CompileLifecycle:
         if not meta:
             return None
         run = await self._store.get_operation(account_id, meta["target_id"], task_id)
-        if run is None or run.get("changes") is None:
+        if run is None or run["meta"].get("changes") is None:
             return None
+        run_meta = run["meta"]
         return {
-            "base": run["base"],
-            "head": run["head"],
-            "diff_dirs": run["diff_dirs"],
-            "full_dirs": run["full_dirs"],
-            "execution": run.get("execution"),
-            "skill_snapshot": run.get("skill_snapshot"),
+            "base": run_meta["base"],
+            "head": run_meta["head"],
+            "diff_dirs": run_meta["diff_dirs"],
+            "full_dirs": run_meta["full_dirs"],
+            "execution": run_meta.get("execution"),
+            "skill_snapshot": run_meta.get("skill_snapshot"),
         }
 
     async def on_finish(self, task: Any, snapshot: ExternalTaskSnapshot) -> ExternalTaskSnapshot:
@@ -1161,6 +1171,7 @@ class CompileLifecycle:
         async with self._store.lock_operation(account_id, target_id, task.task_id, "finish"):
             run = await self._store.get_operation(account_id, target_id, task.task_id)
             if run is not None and run["finished_at"] is None:
+                run_meta = run["meta"]
                 ctx = task_ctx(task.account_id, task.user_id)
                 record = await self._store.get(account_id, target_id)
                 if not self._task_is_current(record, task):
@@ -1180,26 +1191,26 @@ class CompileLifecycle:
                         run["status"] = "committing"
                         await self._store.put_operation(account_id, target_id, run)
                     # Reindex can own content locks once versions are durable.
-                    if not run.get("reindex_task_id"):
+                    if not run_meta.get("reindex_task_id"):
                         async with self._locked_output(request["to"], ctx) as lease:
-                            if not run.get("snapshot_committed"):
-                                run["target_head"] = await self._commit(
+                            if not run_meta.get("snapshot_committed"):
+                                run_meta["target_head"] = await self._commit(
                                     [request["to"]],
                                     f"compile {task.task_id} finish",
                                     ctx,
                                     lease_ref=lease,
                                 )
-                                run["snapshot_committed"] = True
+                                run_meta["snapshot_committed"] = True
                                 await self._store.put_operation(account_id, target_id, run)
-                            head = run["target_head"]
+                            head = run_meta["target_head"]
                             changes = (
                                 await self._fs.diff_paths(
                                     dirs=[request["to"]],
-                                    base=run["target_base"],
+                                    base=run_meta["target_base"],
                                     head=head,
                                     ctx=ctx,
                                 )
-                                if head and run["target_base"]
+                                if head and run_meta["target_base"]
                                 else []
                             )
                             run["result"] = dict.fromkeys(_RESULT_KEYS.values(), 0)
@@ -1213,8 +1224,8 @@ class CompileLifecycle:
                                 any(is_versioned(change["uri"]) for change in changes)
                                 and (record.get("content_updated_at") or 0) < run["started_at"]
                             ):
-                                run["content_changed"] = True
-                    reindex_id = run.get("reindex_task_id")
+                                run_meta["content_changed"] = True
+                    reindex_id = run_meta.get("reindex_task_id")
                     previous = (
                         await get_task_tracker().get(
                             reindex_id, account_id=account_id, user_id=task.user_id
@@ -1225,7 +1236,7 @@ class CompileLifecycle:
                     if reindex_id is None or (
                         previous is not None and previous.error == REINDEX_ENQUEUE_ERROR
                     ):
-                        run["reindex_task_id"] = str(uuid4())
+                        run_meta["reindex_task_id"] = str(uuid4())
                         await self._store.put_operation(account_id, target_id, run)
                     await get_service().reindex(
                         uri=request["to"],
@@ -1234,10 +1245,10 @@ class CompileLifecycle:
                         recursive=True,
                         wait=False,
                         ctx=ctx,
-                        task_id=run["reindex_task_id"],
+                        task_id=run_meta["reindex_task_id"],
                     )
                 else:
-                    if run["target_base"]:
+                    if run_meta["target_base"]:
                         await self._rollback(request["to"], run, ctx)
                     run["error"] = snapshot.error_message or snapshot.status
                 run["status"] = snapshot.status
@@ -1261,6 +1272,7 @@ class CompileLifecycle:
                     and (record.get("last_run") or {}).get("task_id") == task_id
                 )
             ) and run is not None:
+                run_meta = run["meta"]
                 record["last_run"] = {
                     "task_id": task_id,
                     "status": run["status"],
@@ -1269,7 +1281,7 @@ class CompileLifecycle:
                 }
                 outputs = await self._store.get_outputs(account_id, target_id, task_id)
                 if run["finished_at"] is not None and (
-                    run.get("content_changed") or (outputs or {}).get("content_changed")
+                    run_meta.get("content_changed") or (outputs or {}).get("content_changed")
                 ):
                     record["content_updated_at"] = max(
                         record.get("content_updated_at") or 0, run["finished_at"]
@@ -1277,18 +1289,20 @@ class CompileLifecycle:
                 if run["status"] == "completed":
                     first_success = not record["initialized"]
                     record["initialized"] = True
-                    if run.get("head"):
+                    if run_meta.get("head"):
                         progress_key = (
-                            "scheduled_progress" if run["trigger"] == "scheduled" else "progress"
+                            "scheduled_progress"
+                            if run_meta["trigger"] == "scheduled"
+                            else "progress"
                         )
                         record[progress_key] = {
-                            "source_commit": run["head"],
+                            "source_commit": run_meta["head"],
                             "processed_roots": list(run["params"]["from"]),
                             "instruction": (run["params"].get("instruction") or "").strip(),
-                            "skill_snapshot": run.get("skill_snapshot"),
+                            "skill_snapshot": run_meta.get("skill_snapshot"),
                         }
                 # Rollback snapshots include the ordinary edits retained by the run.
-                synced = run.get("target_head") or run.get("target_base")
+                synced = run_meta.get("target_head") or run_meta.get("target_base")
                 if synced:
                     record["versions_head"] = synced
             if record["active_task_id"] == task_id:
@@ -1303,16 +1317,19 @@ class CompileLifecycle:
         task references. Immutable outputs survive deleted version indexes; the
         completion marker closes association before new content can acquire a lease.
         """
+        run_meta = run["meta"]
         target_id = await self._store.find_id(ctx.account_id, to)
         restored, deleted = [], []
         try:
             async with self._locked_output(to, ctx) as lease:
-                if run.get("rollback_head"):
-                    run["target_head"] = run["rollback_head"]
+                if run_meta.get("rollback_head"):
+                    run_meta["target_head"] = run_meta["rollback_head"]
                     return
-                manifest = await self._store.get_outputs(ctx.account_id, target_id, run["task_id"])
+                manifest = await self._store.get_outputs(
+                    ctx.account_id, target_id, run_meta["task_id"]
+                )
                 head = await self._commit(
-                    [to], f"compile {run['task_id']} rollback point", ctx, lease_ref=lease
+                    [to], f"compile {run_meta['task_id']} rollback point", ctx, lease_ref=lease
                 )
                 if not head:
                     return
@@ -1320,13 +1337,13 @@ class CompileLifecycle:
                 changes = {
                     change["uri"]: change["change_type"]
                     for change in await self._fs.diff_paths(
-                        dirs=[to], base=run["target_base"], head=head, ctx=ctx
+                        dirs=[to], base=run_meta["target_base"], head=head, ctx=ctx
                     )
                 }
                 desired = {
                     uri: None
                     if change == "added"
-                    else {"snapshot_id": run["target_base"], "snapshot_path": uri}
+                    else {"snapshot_id": run_meta["target_base"], "snapshot_path": uri}
                     for uri, change in changes.items()
                 }
                 directories, scopes, protected_scopes = set(), set(), set()
@@ -1490,7 +1507,9 @@ class CompileLifecycle:
                     retained = [
                         v
                         for v in index["versions"]
-                        if not (v["meta"]["task_id"] == run["task_id"] and v["source"] == "compile")
+                        if not (
+                            v["meta"]["task_id"] == run_meta["task_id"] and v["source"] == "compile"
+                        )
                     ]
                     if retained == index["versions"]:
                         continue
@@ -1499,10 +1518,10 @@ class CompileLifecycle:
                         await self._store.put_version_index(ctx.account_id, target_id, index)
                     else:
                         await self._store.delete_version_index(ctx.account_id, target_id, uri)
-                run["target_head"] = await self._commit(
-                    [to], f"compile {run['task_id']} rollback", ctx, lease_ref=lease
+                run_meta["target_head"] = await self._commit(
+                    [to], f"compile {run_meta['task_id']} rollback", ctx, lease_ref=lease
                 )
-                run["rollback_head"] = run["target_head"]
+                run_meta["rollback_head"] = run_meta["target_head"]
                 await self._store.put_operation(ctx.account_id, target_id, run)
         finally:
             if restored or deleted:
@@ -1970,15 +1989,12 @@ class CompileVersions:
                 continue
             sources = set(record["from"])
             for run in await self._store.list_operations(ctx.account_id, target["id"]):
+                run_meta = run["meta"]
                 if (
-                    run.get("task_id")
+                    run_meta.get("task_id")
                     and run["finished_at"] is None
                     and run["status"] not in TERMINAL
-                    and (
-                        run["target_deleted_at"] == record["deleted_at"]
-                        if "target_deleted_at" in run
-                        else run["created_at"] > (record["deleted_at"] or 0)
-                    )
+                    and run_meta["target_deleted_at"] == record["deleted_at"]
                 ):
                     sources.update(run.get("params", {}).get("from", []))
             if any(overlaps(source, root.rstrip("/")) for root in watched_uris or []):
@@ -2084,15 +2100,16 @@ class CompileVersions:
                 account_id, record["id"], run["operation_id"], [], versions_available=False
             )
             return
+        run_meta = run["meta"]
         indexes = {index["uri"]: index for index in await self._indexes(account_id, record["id"])}
         ordinary = {
             uri: version
             for uri, index in indexes.items()
-            if (version := self._ordinary_version(index, run["task_id"]))
+            if (version := self._ordinary_version(index, run_meta["task_id"]))
         }
         changes = {change["uri"]: change["change_type"] for change in changes}
         full = (
-            run.get("execution", {}).get("mode") == "full"
+            run_meta.get("execution", {}).get("mode") == "full"
             or run["params"]["args"]["mode"] == "full"
         )
         manifest = await self._store.get_outputs(account_id, record["id"], run["operation_id"])
@@ -2104,7 +2121,7 @@ class CompileVersions:
             }
             for index in indexes.values()
             for version in index["versions"]
-            if version["source"] == "compile" and version["meta"]["task_id"] == run["task_id"]
+            if version["source"] == "compile" and version["meta"]["task_id"] == run_meta["task_id"]
         ]
         recorded = {item["uri"] for item in outputs if item["snapshot_id"] is not None}
         try:
@@ -2130,7 +2147,7 @@ class CompileVersions:
                         await self._store.delete_version_index(account_id, record["id"], uri)
                     continue
                 if index and any(
-                    v["meta"]["task_id"] == run["task_id"] and v["source"] == "compile"
+                    v["meta"]["task_id"] == run_meta["task_id"] and v["source"] == "compile"
                     for v in index["versions"]
                 ):
                     continue
@@ -2140,7 +2157,7 @@ class CompileVersions:
                     previous_roots = (
                         index["versions"][-1].get("provenance", {}).get("source_roots", [])
                     )
-                    roots = sorted(set(previous_roots) | set(run["changed_roots"]))
+                    roots = sorted(set(previous_roots) | set(run_meta["changed_roots"]))
                 created = await self.append(
                     account_id,
                     record["id"],
@@ -2149,9 +2166,9 @@ class CompileVersions:
                     {
                         "source": "compile",
                         "actor": run["actor"],
-                        "meta": {"task_id": run["task_id"]},
+                        "meta": {"task_id": run_meta["task_id"]},
                         "provenance": {
-                            "trigger": run["trigger"],
+                            "trigger": run_meta["trigger"],
                             "skill": run["params"]["skill"],
                             "source_roots": roots,
                         },
@@ -2289,9 +2306,9 @@ class CompileVersions:
                         target_id,
                         run["operation_id"],
                         [{"uri": uri, "version_id": None, "snapshot_id": None} for uri in targets]
-                        if run["target_base"] is None
+                        if run["meta"]["target_base"] is None
                         else [],
-                        versions_available=run["target_base"] is not None,
+                        versions_available=run["meta"]["target_base"] is not None,
                         content_changed=True,
                     )
                 else:
@@ -2364,11 +2381,15 @@ class CompileVersions:
             run
             and run["started_at"] is not None
             and run["finished_at"] is None
-            and not run.get("rollback_head")
+            and not run["meta"].get("rollback_head")
         ):
             return {
-                "task_id": run["task_id"],
-                **({"after_compile_snapshot": True} if run.get("snapshot_committed") else {}),
+                "task_id": run["meta"]["task_id"],
+                **(
+                    {"after_compile_snapshot": True}
+                    if run["meta"].get("snapshot_committed")
+                    else {}
+                ),
             }
         return {}
 
