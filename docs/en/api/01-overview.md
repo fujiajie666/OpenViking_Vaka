@@ -459,6 +459,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/snapshot/restore` | Restore a historical snapshot |
 | GET | `/api/v1/snapshot/show` | Inspect a snapshot or one of its files |
 | GET | `/api/v1/snapshot/diff` | Compare snapshots |
+| GET | `/api/v1/snapshot/diff-paths` | Page changed source files |
 | GET | `/api/v1/snapshot/ignore` | Read snapshot ignore rules |
 | PUT | `/api/v1/snapshot/ignore` | Replace snapshot ignore rules |
 | DELETE | `/api/v1/snapshot/ignore` | Clear snapshot ignore rules |

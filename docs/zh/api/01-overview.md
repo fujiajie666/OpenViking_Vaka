@@ -454,6 +454,7 @@ JSON 输出 - 错误：
 | POST | `/api/v1/snapshot/restore` | 恢复历史快照 |
 | GET | `/api/v1/snapshot/show` | 查看快照或其中的文件 |
 | GET | `/api/v1/snapshot/diff` | 对比快照 |
+| GET | `/api/v1/snapshot/diff-paths` | 分页列出变化的源文件 |
 | GET | `/api/v1/snapshot/ignore` | 读取快照忽略规则 |
 | PUT | `/api/v1/snapshot/ignore` | 替换快照忽略规则 |
 | DELETE | `/api/v1/snapshot/ignore` | 清空快照忽略规则 |
