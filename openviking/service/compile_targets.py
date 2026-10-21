@@ -169,6 +169,9 @@ class CompileStore(Protocol):
     async def put_operation(
         self, account_id: str, target_id: str, operation: Dict[str, Any]
     ) -> None: ...
+    async def mark_content_changed(
+        self, account_id: str, target_id: str, operation_id: str
+    ) -> None: ...
     async def list_operations(
         self,
         account_id: str,
@@ -195,7 +198,6 @@ class CompileStore(Protocol):
         outputs: List[dict],
         *,
         versions_available: bool = True,
-        content_changed: bool = False,
         effects: Optional[List[dict]] = None,
         ordinary_operation: Optional[str] = None,
         metadata_lease: Any = None,
@@ -385,9 +387,30 @@ class CompileStateStore:
     async def put_operation(
         self, account_id: str, target_id: str, operation: Dict[str, Any]
     ) -> None:
-        await self.write_json(
-            self._operation_path(account_id, target_id, operation["operation_id"]), operation
-        )
+        """Save operation state without clearing a concurrently recorded content change.
+
+        The merged marker also updates the caller's metadata so finalization uses
+        the same durable value when publishing the target's content update time.
+        """
+        path = self._operation_path(account_id, target_id, operation["operation_id"])
+        async with self.locked(path) as lease:
+            stored = await self.read_json(path)
+            if stored and stored["meta"].get("content_changed"):
+                operation["meta"]["content_changed"] = True
+            await self.write_json(path, operation, lease)
+
+    async def mark_content_changed(
+        self, account_id: str, target_id: str, operation_id: str
+    ) -> None:
+        """Persist an actual Compile write once; raise NotFoundError for a missing operation."""
+        path = self._operation_path(account_id, target_id, operation_id)
+        async with self.locked(path) as lease:
+            operation = await self.read_json(path)
+            if operation is None:
+                raise NotFoundError(operation_id, "operation")
+            if not operation["meta"].get("content_changed"):
+                operation["meta"]["content_changed"] = True
+                await self.write_json(path, operation, lease)
 
     @asynccontextmanager
     async def lock_operation(
@@ -421,7 +444,6 @@ class CompileStateStore:
         outputs: List[dict],
         *,
         versions_available: bool = True,
-        content_changed: bool = False,
         effects: Optional[List[dict]] = None,
         ordinary_operation: Optional[str] = None,
         metadata_lease: Any = None,
@@ -430,29 +452,17 @@ class CompileStateStore:
 
         Null version/snapshot references indicate unavailable versions. URI paths
         stay fixed at production time so moving a live file cannot change history.
-        content_changed durably marks actual writes once without adding output references.
         Path effects and task references retain content-commit order independently
         of the operation's later refresh and terminal history updates.
         """
         path = self._outputs_path(account_id, target_id, operation_id)
         async with self.locked(path, metadata_lease) as lease:
             data = await self.read_json(path) or {"outputs": []}
-            if (
-                content_changed
-                and data.get("content_changed")
-                and not outputs
-                and versions_available
-                and effects is None
-                and ordinary_operation is None
-            ):
-                return
             merged = {item["uri"]: item for item in data["outputs"]}
             merged.update((item["uri"], item) for item in outputs)
             data["outputs"] = [merged[uri] for uri in sorted(merged)]
             if not versions_available or any(item["snapshot_id"] is None for item in outputs):
                 data["versions_available"] = False
-            if content_changed:
-                data["content_changed"] = True
             if effects is not None:
                 paths = data.setdefault("effects", [])
                 paths.extend(effect for effect in effects if effect not in paths)
@@ -792,7 +802,7 @@ def new_compile_operation(task: Any, record: Dict[str, Any]) -> Dict[str, Any]:
             "target_base": None,
             "target_head": None,
             "snapshot_committed": False,
-            "content_changed": False,  # Untracked changes requiring a finalization timestamp.
+            "content_changed": False,  # Content changes requiring a finalization timestamp.
             "reindex_task_id": None,
             "base": None,
             "head": None,
@@ -1272,6 +1282,8 @@ class CompileLifecycle:
                     and (record.get("last_run") or {}).get("task_id") == task_id
                 )
             ) and run is not None:
+                # Write hooks can publish their marker after final operation state is saved.
+                run = await self._store.get_operation(account_id, target_id, task_id) or run
                 run_meta = run["meta"]
                 record["last_run"] = {
                     "task_id": task_id,
@@ -1279,10 +1291,7 @@ class CompileLifecycle:
                     "finished_at": run["finished_at"],
                     "error": run.get("error"),
                 }
-                outputs = await self._store.get_outputs(account_id, target_id, task_id)
-                if run["finished_at"] is not None and (
-                    run_meta.get("content_changed") or (outputs or {}).get("content_changed")
-                ):
+                if run["finished_at"] is not None and run_meta.get("content_changed"):
                     record["content_updated_at"] = max(
                         record.get("content_updated_at") or 0, run["finished_at"]
                     )
@@ -2301,16 +2310,20 @@ class CompileVersions:
                     else None
                 )
                 if run and run["started_at"] is not None and run["finished_at"] is None:
-                    await self._store.merge_outputs(
-                        ctx.account_id,
-                        target_id,
-                        run["operation_id"],
-                        [{"uri": uri, "version_id": None, "snapshot_id": None} for uri in targets]
-                        if run["meta"]["target_base"] is None
-                        else [],
-                        versions_available=run["meta"]["target_base"] is not None,
-                        content_changed=True,
+                    await self._store.mark_content_changed(
+                        ctx.account_id, target_id, run["operation_id"]
                     )
+                    if run["meta"]["target_base"] is None:
+                        await self._store.merge_outputs(
+                            ctx.account_id,
+                            target_id,
+                            run["operation_id"],
+                            [
+                                {"uri": uri, "version_id": None, "snapshot_id": None}
+                                for uri in targets
+                            ],
+                            versions_available=False,
+                        )
                 else:
                     run = None
             is_batch = (
