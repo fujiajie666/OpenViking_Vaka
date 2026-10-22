@@ -108,11 +108,11 @@ enum CompileCommand {
         /// Wait for async processing to finish
         #[arg(long, default_value = "false", help_heading = "Common options")]
         wait: bool,
-        /// Content post-write processing mode
+        /// Update vectors without semantic processing
         #[arg(
             long = "processing-mode",
-            default_value = "semantic_and_vectors",
-            value_parser = ["semantic_and_vectors", "vectors_only"],
+            default_value = "vectors_only",
+            value_parser = ["vectors_only"],
             help_heading = "Advanced options"
         )]
         processing_mode: String,
@@ -1070,7 +1070,7 @@ mod tests {
     use super::*;
     use clap::{Command, CommandFactory};
 
-    /// Captures shared parsing behavior; write provenance is fixed by this distribution.
+    /// Captures shared parsing behavior; write provenance and processing are restricted.
     #[derive(Debug, PartialEq)]
     struct ArgumentContract {
         id: String,
@@ -1180,12 +1180,19 @@ mod tests {
                 .find(|command| command.get_name() == name)
                 .expect("selected command must exist in the compile CLI");
 
+            let mut full_contract = argument_contract(full_command);
+            if name == "write" {
+                full_contract.retain(|argument| argument.id != "edit_source");
+                let processing_mode = full_contract
+                    .iter_mut()
+                    .find(|argument| argument.id == "processing_mode")
+                    .expect("write must expose its processing mode");
+                processing_mode.default_values = vec!["vectors_only".to_string()];
+                processing_mode.possible_values = vec!["vectors_only".to_string()];
+            }
             assert_eq!(
                 argument_contract(compile_command),
-                argument_contract(full_command)
-                    .into_iter()
-                    .filter(|argument| name != "write" || argument.id != "edit_source")
-                    .collect::<Vec<_>>(),
+                full_contract,
                 "argument contract differs for {name}"
             );
             assert_eq!(
@@ -1267,6 +1274,39 @@ mod tests {
                 );
             }
             _ => panic!("expected write command"),
+        }
+    }
+
+    #[test]
+    fn write_defaults_to_vectors_only_and_exposes_only_that_mode() {
+        let args = [
+            "ov",
+            "write",
+            "viking://resources/a.md",
+            "--content",
+            "hello",
+        ];
+        let cli = CompileCli::try_parse_from(args).unwrap();
+        assert!(matches!(
+            cli.command,
+            CompileCommand::Write { processing_mode, edit_source, .. }
+                if processing_mode == "vectors_only" && edit_source == "compile"
+        ));
+        let error = CompileCli::try_parse_from(
+            args.into_iter()
+                .chain(["--processing-mode", "semantic_and_vectors"]),
+        )
+        .err()
+        .expect("unsupported processing modes must be rejected");
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
+        let mut command = CompileCli::command();
+        let write = command.find_subcommand_mut("write").unwrap();
+        for help in [
+            write.render_help().to_string(),
+            write.render_long_help().to_string(),
+        ] {
+            assert!(help.contains("vectors_only"));
+            assert!(!help.contains("semantic_and_vectors"));
         }
     }
 

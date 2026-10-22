@@ -1,6 +1,6 @@
 # @openviking/compile
 
-OpenViking retrieval and content-write CLI for cloud agents. The package installs an `ov` command with seven retrieval commands, `snapshot diff`, `snapshot diff-paths`, and `write`; other mutation and administration commands are not included. Commands follow the same option contract and behavior as their counterparts in `@openviking/cli`, except that `write` always records its edit source as `compile` and exposes no source option.
+OpenViking retrieval and content-write CLI for cloud agents. The package installs an `ov` command with seven retrieval commands, `snapshot diff`, `snapshot diff-paths`, and `write`; other mutation and administration commands are not included. Commands follow the same option contract and behavior as their counterparts in `@openviking/cli`, except that `write` always records its edit source as `compile`, exposes no source option, and accepts only `vectors_only` processing.
 
 ## Install
 
@@ -96,7 +96,7 @@ ov write viking://resources/notes.md --from-file ./notes.md --append
 ov write viking://resources/new.md --content "new text" --mode create --wait
 ```
 
-The write modes are `replace` (default), `append`, and `create`. Use `--processing-mode vectors_only` to skip semantic processing while updating vectors. Writes support `--tags`, `--tag-mode replace|append|clear`, and ACL JSON via `--acl`. The `clear` tag mode does not require `--tags`.
+The write modes are `replace` (default), `append`, and `create`. Writes use `vectors_only` processing by default, updating vectors without semantic processing. The optional `--processing-mode` argument accepts only `vectors_only`. Writes support `--tags`, `--tag-mode replace|append|clear`, and ACL JSON via `--acl`. The `clear` tag mode does not require `--tags`.
 
 Every write sends `edit_source: "compile"` to record Compile provenance in output versions. No source argument is needed. The server must support Compile edit sources.
 
