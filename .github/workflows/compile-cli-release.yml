@@ -46,7 +46,7 @@ jobs:
             npm_pkg: compile-darwin-x64
             npm_os: darwin
             npm_cpu: x64
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             npm_pkg: compile-darwin-arm64
             npm_os: darwin
