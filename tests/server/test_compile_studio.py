@@ -4,7 +4,7 @@ import asyncio
 import json
 import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -292,7 +292,9 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
 
     # Interrupted finalization reuses durable checkpoints without publishing another version.
     store = service.compile.lifecycle.store
-    target_id = (await store.get_by_to(ctx.account_id, target))["id"]
+    initial_state = await store.get_by_to(ctx.account_id, target)
+    assert initial_state["auto_update"] is False and initial_state["update_schedule"] is None
+    target_id = initial_state["id"]
     operation = await store.get_operation(ctx.account_id, target_id, first)
     checkpoint = dict(operation["meta"])
     assert checkpoint["snapshot_committed"] and checkpoint["target_head"]
@@ -477,17 +479,20 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
         AsyncMock(return_value=ResolvedIdentity(role=Role.USER, **owner)), groups
     )
     service.compile.lifecycle.save_credential = scheduler.save_credential
-    configured = await client.post(
-        "/api/v1/compile/config/update",
-        json={
-            "from": [source],
-            "to": target,
-            "skill": skill,
-            "auto_update": True,
-            "update_schedule": {"frequency": "daily"},
-        },
-    )
+    settings = {
+        "from": [source],
+        "to": target,
+        "skill": skill,
+        "auto_update": True,
+        "update_schedule": {"frequency": "daily"},
+    }
+    configured = await client.post("/api/v1/compile/config/update", json=settings)
     assert configured.status_code == 200, configured.text
+    assert configured.json()["result"]["update_schedule"] == {
+        "frequency": "daily",
+        "hour": 0,
+        "minute": 0,
+    }
     target_id = configured.json()["result"]["target_id"]
     now = datetime.now(TZ) + timedelta(days=1)
     runtime_status = "completed"
@@ -501,6 +506,36 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     await service.compile._tasks.execute(scheduled, **owner)
     assert (await tracker.get(scheduled, **owner)).status == "completed"
     assert await scheduler.trigger_if_due(ctx.account_id, target_id, now) == "not_due"
+
+    # Disabling clears a supplied rule; null and omitted rules are valid only while disabled.
+    for rule in ({"update_schedule": {"frequency": "daily"}}, {"update_schedule": None}, {}):
+        disabled = await client.post(
+            "/api/v1/compile/config/update",
+            json={key: value for key, value in settings.items() if key != "update_schedule"}
+            | {"auto_update": False}
+            | rule,
+        )
+        assert disabled.status_code == 200, disabled.text
+        config = disabled.json()["result"]
+        assert config["auto_update"] is False
+        assert config["update_schedule"] is None and config["next_run_at"] is None
+    for rule in ({}, {"update_schedule": None}):
+        rejected = await client.post(
+            "/api/v1/compile/config/update",
+            json={key: value for key, value in settings.items() if key != "update_schedule"} | rule,
+        )
+        assert rejected.status_code == 400, rejected.text
+        rejected = await client.post(
+            "/api/v1/compile", json={**payload, "args": {"auto_update": True, **rule}}
+        )
+        assert rejected.status_code == 400, rejected.text
+    await submit(
+        {**payload, "args": {"auto_update": False, "update_schedule": None}},
+        "compile-disable-schedule-key",
+    )
+    assert (await store.get(ctx.account_id, target_id))["update_schedule"] is None
+    configured = await client.post("/api/v1/compile/config/update", json=settings)
+    assert configured.status_code == 200, configured.text
     groups.return_value = ()
     with pytest.raises(PermissionDeniedError):
         await scheduler.trigger_if_due(ctx.account_id, target_id, now + timedelta(days=1))
@@ -520,6 +555,65 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     assert (await client.get("/api/v1/tasks", params={"pagination": "cursor"})).json()["result"][
         "items"
     ] == []
+
+
+@pytest.mark.asyncio
+async def test_disabled_schedule_clears_legacy_state_and_lifecycle_changes(service, monkeypatch):
+    """Disabled rules stay null across legacy reads, delayed triggers and target reuse."""
+    from datetime import datetime
+
+    import openviking.service.compile_scheduler as scheduling
+
+    store = service.compile.lifecycle.store
+    account = service.user.account_id
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    target = "viking://resources/scheduled"
+    target_id = await store.register(account, target)
+    path = store._record_path(account, target_id)
+    schedule = {"frequency": "daily", "hour": 0, "minute": 0}
+    legacy = await store.get(account, target_id)
+    legacy["update_schedule"] = schedule
+    await store.write_json(path, legacy)
+    await store._sync_summary(account, legacy)
+    assert (await store.get(account, target_id))["update_schedule"] is None
+    assert (await store.list_summaries(account))[0]["update_schedule"] is None
+    assert (await store.read_json(path))["update_schedule"] == schedule
+    async with store.edit(account, target_id):
+        pass
+    assert (await store.read_json(path))["update_schedule"] is None
+    summaries = await store.read_json(store._targets_path(account))
+    assert summaries["targets"][0]["update_schedule"] is None
+
+    scheduler = scheduling.CompileScheduler(service.compile, store, service.viking_fs)
+    now = datetime(2026, 10, 22, 12, tzinfo=scheduling.TZ)
+    with monkeypatch.context() as patch:
+        slot = Mock(wraps=scheduling.current_slot)
+        patch.setattr(scheduling, "current_slot", slot)
+        await scheduler.scan_once(now)
+        assert await scheduler.trigger_if_due(account, target_id, now) == "not_due"
+        slot.assert_not_called()
+
+    async with store.edit(account, target_id) as record:
+        record.update(
+            initialized=True,
+            auto_update=True,
+            update_schedule=schedule,
+            auto_update_enabled_at="2026-10-20T00:00:00+08:00",
+        )
+    assert await scheduler.trigger_if_due(account, target_id, now) == "disabled"
+    invalid = await store.get(account, target_id)
+    assert invalid["auto_update"] is False and invalid["update_schedule"] is None
+    assert (await store.list_summaries(account))[0]["update_schedule"] is None
+
+    async with store.edit(account, target_id) as record:
+        record.update(auto_update=True, update_schedule=schedule)
+    await service.compile.lifecycle.versions.after_remove(target, ctx)
+    deleted = await store.get(account, target_id)
+    assert deleted["status"] == "deleted" and deleted["update_schedule"] is None
+    assert await store.register(account, target) == target_id
+    reused = await store.get(account, target_id)
+    assert reused["status"] == "active" and reused["auto_update"] is False
+    assert reused["update_schedule"] is None
 
 
 @pytest.mark.asyncio

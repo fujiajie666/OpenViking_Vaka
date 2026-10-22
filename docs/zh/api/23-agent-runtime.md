@@ -114,15 +114,15 @@ task, err := client.Compile(
 
 这些接口使用当前账号和认证上下文。`to` 为已注册目标的 `viking://` URI。读取或更新单个目标需要写权限；目标列表仅返回有访问权限的目标。
 
-| HTTP API | 返回结果（`status: "ok"`） |
+| HTTP API | 说明与返回结果（`status: "ok"`） |
 |----------|--------------------------|
 | `GET /api/v1/compile/config?to={to}` | `result` 包含目标配置和运行状态 |
-| `POST /api/v1/compile/config/update` | `result` 包含更新后的配置和运行状态 |
+| `POST /api/v1/compile/config/update` | 请求体必填 `to`，指定要更新配置的已注册编译产物目录；`result` 包含更新后的配置和运行状态 |
 | `GET /api/v1/compile/configs` | `result.targets` 包含可见目标摘要 |
 | `GET /api/v1/compile/operations?to={to}` | `result.operations` 按时间倒序返回操作记录；`result.next_cursor` 用于翻页 |
 | `GET /api/v1/compile/operations/{operation_id}/outputs?to={to}` | `result.outputs` 按 URI 排序返回产出文件及冻结版本引用；`result.next_cursor` 用于翻页 |
 
-更新请求体必填 `to`、`from`（非空来源 URI 数组）、`skill`、`auto_update`（布尔值）和 `update_schedule`。可选 `instruction` 省略时保留已保存的值，传 `null` 或空字符串时清空。更新配置不提交 Compile 任务。
+更新请求体必填 `to`、`from`（非空来源 URI 数组）、`skill` 和 `auto_update`（布尔值）。`auto_update=true` 时必须提供有效的 `update_schedule`；`auto_update=false` 时可省略或传 `null`，已保存的规则会清空，返回值为 `null`。新目标不设置默认规则，关闭后重新开启需要提供规则。可选 `instruction` 省略时保留已保存的值，传 `null` 或空字符串时清空。更新配置不提交 Compile 任务。
 
 `update_schedule` 必填 `frequency`（`daily` 或 `weekly`）。可选 `hour`（0–23）和 `minute`（0–59）默认均为 0。每周计划还接受 `weekday`（1 为周一，7 为周日，默认 1）。计划使用 `Asia/Shanghai` 时区。
 

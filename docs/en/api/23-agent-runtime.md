@@ -114,15 +114,15 @@ task, err := client.Compile(
 
 These endpoints use the current account and authentication context. `to` is the registered target's `viking://` URI. Reading or updating one target requires write access; listing targets returns only accessible targets.
 
-| HTTP API | Result (`status: "ok"`) |
+| HTTP API | Description and result (`status: "ok"`) |
 |----------|------------------------|
 | `GET /api/v1/compile/config?to={to}` | `result` contains target settings and run status |
-| `POST /api/v1/compile/config/update` | `result` contains the updated settings and run status |
+| `POST /api/v1/compile/config/update` | Required JSON body field `to` identifies the registered Compile output directory to configure; `result` contains the updated settings and run status |
 | `GET /api/v1/compile/configs` | `result.targets` contains visible target summaries |
 | `GET /api/v1/compile/operations?to={to}` | `result.operations` contains operations, newest first; `result.next_cursor` continues pagination |
 | `GET /api/v1/compile/operations/{operation_id}/outputs?to={to}` | `result.outputs` contains output files and frozen version references, ordered by URI; `result.next_cursor` continues pagination |
 
-The update body requires `to`, `from` (a non-empty source URI array), `skill`, `auto_update` (boolean), and `update_schedule`. Optional `instruction` preserves the saved value when omitted; `null` or an empty string clears it. Updating settings does not submit a Compile task.
+The update body requires `to`, `from` (a non-empty source URI array), `skill`, and `auto_update` (boolean). When `auto_update=true`, a valid `update_schedule` is required. When `auto_update=false`, the schedule can be omitted or null; the saved rule is cleared and the returned value is null. New targets have no default rule, and enabling updates after disabling them requires a rule. Optional `instruction` preserves the saved value when omitted; `null` or an empty string clears it. Updating settings does not submit a Compile task.
 
 `update_schedule` requires `frequency` (`daily` or `weekly`). Optional `hour` (0–23) and `minute` (0–59) default to 0. Weekly schedules also accept `weekday` (1=Monday through 7=Sunday, default 1). Schedules use `Asia/Shanghai` time.
 

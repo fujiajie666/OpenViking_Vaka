@@ -52,7 +52,7 @@ class CompileConfigUpdate(BaseModel):
     skill: str = Field(min_length=1)
     instruction: str | None = None
     auto_update: bool
-    update_schedule: UpdateSchedule
+    update_schedule: UpdateSchedule | None = None
 
     @property
     def instruction_sent(self) -> bool:
@@ -619,7 +619,10 @@ class CompileService:
             if body.instruction_sent:
                 record["instruction"] = (body.instruction or "").strip() or None
             await lifecycle.apply_schedule(
-                record, ctx, body.auto_update, body.update_schedule.model_dump()
+                record,
+                ctx,
+                body.auto_update,
+                body.update_schedule.model_dump() if body.update_schedule is not None else None,
             )
         if lifecycle.reschedule is not None:
             await lifecycle.reschedule(ctx.account_id, record)

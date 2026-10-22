@@ -116,7 +116,7 @@ def new_record(target_id: str, to: str) -> Dict[str, Any]:
         "initialized": False,
         "auto_update": False,
         "schedule_configured": False,  # Explicit schedule settings survive ordinary submissions.
-        "update_schedule": dict(DEFAULT_SCHEDULE),
+        "update_schedule": None,
         "auto_update_enabled_at": None,
         "last_triggered_slot": None,
         "last_error": None,
@@ -131,6 +131,13 @@ def new_record(target_id: str, to: str) -> Dict[str, Any]:
         "first_compile_created_at": None,  # First task creation in Unix seconds; None when unknown.
         "execution_context": {"executor": None, "credential": None, "args": {}},
     }
+
+
+def _normalize_schedule(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize stored records in place so disabled schedules are null on reads and writes."""
+    if not record["auto_update"]:
+        record["update_schedule"] = None
+    return record
 
 
 def summarize(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -289,7 +296,7 @@ class CompileStateStore:
         path = self._targets_path(account_id)
         async with self.locked(path, inherited_lease):
             data = await self.read_json(path)
-            return list((data or {}).get("targets", []))
+            return [_normalize_schedule(item) for item in (data or {}).get("targets", [])]
 
     async def _sync_summary(self, account_id: str, record: Dict[str, Any]) -> None:
         """Update only this target's entry so concurrent writers never clobber each other."""
@@ -313,7 +320,8 @@ class CompileStateStore:
     # ---------- state.json ----------
 
     async def get(self, account_id: str, target_id: str) -> Optional[Dict[str, Any]]:
-        return await self.read_json(self._record_path(account_id, target_id))
+        record = await self.read_json(self._record_path(account_id, target_id))
+        return _normalize_schedule(record) if record is not None else None
 
     async def get_by_to(
         self, account_id: str, to: str, *, include_deleted: bool = False
@@ -326,11 +334,11 @@ class CompileStateStore:
         """Yield the record under its lock; it is saved (and summarized) on clean exit."""
         path = self._record_path(account_id, target_id)
         async with self.locked(path) as lease:
-            record = await self.read_json(path)
+            record = await self.get(account_id, target_id)
             if record is None:
                 raise LookupError(f"Compile target not found: {target_id}")
             yield record
-            await self.write_json(path, record, lease)
+            await self.write_json(path, _normalize_schedule(record), lease)
             await self._sync_summary(account_id, record)
 
     async def register(self, account_id: str, to: str) -> str:
@@ -728,7 +736,6 @@ class WeeklySchedule(DailySchedule):
 
 
 UpdateSchedule = Annotated[Union[DailySchedule, WeeklySchedule], Field(discriminator="frequency")]
-DEFAULT_SCHEDULE = {"frequency": "daily", "hour": 0, "minute": 0}
 
 
 def parse_schedule(value: Any) -> Dict[str, Any]:
@@ -747,7 +754,7 @@ def split_control_args(args: Optional[Mapping[str, Any]]) -> tuple[dict, dict]:
     control = {key: runtime.pop(key) for key in CONTROL_ARGS if key in runtime}
     if control.get("mode", "incremental") not in {"incremental", "full"}:
         raise InvalidArgumentError("args.mode must be 'incremental' or 'full'")
-    if "update_schedule" in control:
+    if control.get("update_schedule") is not None:
         control["update_schedule"] = parse_schedule(control["update_schedule"])
     if not isinstance(control.get("auto_update", False), bool):
         raise InvalidArgumentError("args.auto_update must be a boolean")
@@ -910,10 +917,15 @@ class CompileLifecycle:
         record: Dict[str, Any],
         ctx: RequestContext,
         auto_update: bool,
-        schedule: Dict[str, Any],
+        schedule: Optional[Dict[str, Any]],
     ) -> None:
+        """Save update settings; enabling requires a rule, and disabling clears it and the key."""
         from openviking.service.compile_scheduler import now_iso
 
+        if auto_update and schedule is None:
+            raise InvalidArgumentError("update_schedule is required when auto_update is true")
+        if not auto_update:
+            schedule = None
         changed = auto_update != record["auto_update"] or schedule != record["update_schedule"]
         if auto_update:
             if self.save_credential is None:

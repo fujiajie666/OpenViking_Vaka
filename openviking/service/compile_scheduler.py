@@ -182,7 +182,9 @@ class CompileScheduler:
         for account_id in await self._store.list_accounts():
             for item in await self._store.list_summaries(account_id):
                 try:
-                    if is_due(item, current_slot(item["update_schedule"], now)):
+                    if item.get("auto_update") and is_due(
+                        item, current_slot(item["update_schedule"], now)
+                    ):
                         await self.trigger_if_due(account_id, item["id"], now)
                     elif item.get("auto_update"):
                         await self.reschedule(account_id, item)
@@ -230,8 +232,8 @@ class CompileScheduler:
         """Submit the target's scheduled task for the current slot at most once."""
         now = now or datetime.now(TZ)
         async with self._store.edit(account_id, target_id) as record:
-            slot = current_slot(record["update_schedule"], now)
-            if not is_due(record, slot):
+            slot = current_slot(record["update_schedule"], now) if record["auto_update"] else None
+            if slot is None or not is_due(record, slot):
                 await self.reschedule(account_id, record, raise_on_error=True)
                 return "not_due"
             slot_iso = slot.isoformat()
