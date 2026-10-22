@@ -66,8 +66,15 @@ async def update_compile_config(
 
 
 @router.get("/compile/configs")
-async def list_compile_configs(ctx: RequestContext = Depends(get_request_context)):
-    return Response(status="ok", result={"targets": await get_service().compile.list_configs(ctx)})
+async def list_compile_configs(
+    limit: int = Query(20, ge=1, le=100),
+    cursor: str | None = Query(None),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    return Response(
+        status="ok",
+        result=await get_service().compile.list_configs(ctx, limit=limit, cursor=cursor),
+    )
 
 
 @router.get("/compile/operations")

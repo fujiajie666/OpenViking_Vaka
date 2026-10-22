@@ -118,7 +118,7 @@ These endpoints use the current account and authentication context. `to` is the 
 |----------|------------------------|
 | `GET /api/v1/compile/config?to={to}` | `result` contains target settings and run status |
 | `POST /api/v1/compile/config/update` | Required JSON body field `to` identifies the registered Compile output directory to configure; `result` contains the updated settings and run status |
-| `GET /api/v1/compile/configs` | `result.targets` contains visible target summaries |
+| `GET /api/v1/compile/configs` | Optional query parameters: `limit` (1–100, default 20) and `cursor`; `result.targets` contains this page of visible target summaries ordered by `target_id` ascending; pass `result.next_cursor` unchanged as the next page's `cursor`; null marks the last page |
 | `GET /api/v1/compile/operations?to={to}` | `result.operations` contains operations, newest first; `result.next_cursor` continues pagination |
 | `GET /api/v1/compile/operations/{operation_id}/outputs?to={to}` | `result.outputs` contains output files and frozen version references, ordered by URI; `result.next_cursor` continues pagination |
 

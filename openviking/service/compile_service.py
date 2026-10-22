@@ -628,12 +628,20 @@ class CompileService:
             await lifecycle.reschedule(ctx.account_id, record)
         return self._config_view(record)
 
-    async def list_configs(self, ctx: RequestContext) -> list[dict[str, Any]]:
+    async def list_configs(
+        self, ctx: RequestContext, *, limit: int, cursor: str | None
+    ) -> dict[str, Any]:
+        """Page accessible targets by immutable ID, checking one extra visible item for continuation."""
         from openviking.service.compile_scheduler import next_run_at
 
         lifecycle = self._require_lifecycle()
         items = []
-        for item in await lifecycle.store.list_summaries(ctx.account_id):
+        summaries = sorted(
+            await lifecycle.store.list_summaries(ctx.account_id), key=lambda item: item["id"]
+        )
+        for item in summaries:
+            if cursor and item["id"] <= cursor:
+                continue
             try:
                 await lifecycle._fs._ensure_access(item["to"], ctx)
             except PermissionDeniedError:
@@ -654,7 +662,13 @@ class CompileService:
                     "conflicts_num": item.get("conflicts_num", 0),
                 }
             )
-        return items
+            if len(items) > limit:
+                break
+        page = items[:limit]
+        return {
+            "targets": page,
+            "next_cursor": page[-1]["target_id"] if len(items) > limit else None,
+        }
 
     async def list_operations(
         self, to: str, ctx: RequestContext, *, limit: int, cursor: str | None

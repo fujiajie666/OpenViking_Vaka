@@ -295,6 +295,16 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     initial_state = await store.get_by_to(ctx.account_id, target)
     assert initial_state["auto_update"] is False and initial_state["update_schedule"] is None
     target_id = initial_state["id"]
+    with monkeypatch.context() as patch:
+        summary = (await store.list_summaries(ctx.account_id))[0]
+        summaries = [{**summary, "id": f"target_{i}"} for i in (1, 0)]
+        patch.setattr(store, "list_summaries", AsyncMock(return_value=summaries))
+        p = (await client.get("/api/v1/compile/configs?limit=1")).json()["result"]
+        assert [item["target_id"] for item in p["targets"]] == ["target_0"]
+        assert p["next_cursor"] == "target_0"
+        p = (await client.get("/api/v1/compile/configs?limit=1&cursor=target_0")).json()["result"]
+        assert [item["target_id"] for item in p["targets"]] == ["target_1"]
+        assert p["next_cursor"] is None
     operation = await store.get_operation(ctx.account_id, target_id, first)
     checkpoint = dict(operation["meta"])
     assert checkpoint["snapshot_committed"] and checkpoint["target_head"]
