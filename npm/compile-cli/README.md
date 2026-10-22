@@ -1,6 +1,6 @@
 # @openviking/compile
 
-OpenViking retrieval and content-write CLI for cloud agents. The package installs an `ov` command with seven retrieval commands plus `write`; other mutation and administration commands are not included. Each included command follows the same option contract and behavior as its counterpart in `@openviking/cli`.
+OpenViking retrieval and content-write CLI for cloud agents. The package installs an `ov` command with seven retrieval commands, `snapshot diff`, `snapshot diff-paths`, and `write`; other mutation and administration commands are not included. Commands follow the same option contract and behavior as their counterparts in `@openviking/cli`, except that `write` always records its edit source as `compile` and exposes no source option.
 
 ## Install
 
@@ -59,6 +59,8 @@ from `OPENVIKING_API_KEY`; credentials in `ovcli.conf` are ignored. Set
 | `ov tree <uri>` | Print a directory tree |
 | `ov find <query>` | Run semantic retrieval |
 | `ov search <query>` | Retrieve ranked hits or assembled context using semantic or keyword search |
+| `ov snapshot diff <uri> --to <ref>` | Compare one file between snapshots |
+| `ov snapshot diff-paths --paths <uris> --to <ref>` | List changed source files under directories between snapshots |
 
 Run `ov <command> --help` for command-specific options. Add `--output json` for machine-readable output.
 
@@ -74,6 +76,18 @@ ov find "recent events" --events-time-decay-protection 7d
 
 Listings preserve `has_more` in JSON output and display a pagination hint in table output when more entries are available.
 
+`snapshot diff` compares one file between snapshots. Use `--from` to select the older snapshot; omitting it compares against an empty file. The default output is diff text; add `--output json` for the structured result.
+
+```bash
+ov snapshot diff viking://resources/docs/notes.md --from <base-ref> --to <head-ref>
+```
+
+`snapshot diff-paths` accepts comma-separated directory URIs. Use `--from` to select the older snapshot; omitting it compares against an empty tree. References accept commit IDs, branches, or tags. Pagination uses `--offset` (default: `0`) and `--limit` (default: `100`, range: `1`–`1000`).
+
+```bash
+ov snapshot diff-paths --paths viking://resources/docs,viking://resources/notes --from <base-ref> --to <head-ref> --offset 0 --limit 100 --output json
+```
+
 `write` accepts inline text or a local UTF-8 text file:
 
 ```bash
@@ -84,7 +98,7 @@ ov write viking://resources/new.md --content "new text" --mode create --wait
 
 The write modes are `replace` (default), `append`, and `create`. Use `--processing-mode vectors_only` to skip semantic processing while updating vectors. Writes support `--tags`, `--tag-mode replace|append|clear`, and ACL JSON via `--acl`. The `clear` tag mode does not require `--tags`.
 
-Use `--edit-source manual|agent|compile` to identify the editor in Compile output versions (default: `agent`). The default is omitted from the request for compatibility with servers that do not support this field.
+Every write sends `edit_source: "compile"` to record Compile provenance in output versions. No source argument is needed. The server must support Compile edit sources.
 
 `write --wait` waits within the HTTP request timeout. A separate `write --timeout` option is not supported by the current API.
 

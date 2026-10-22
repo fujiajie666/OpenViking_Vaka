@@ -73,7 +73,7 @@ enum CompileCommand {
         #[arg(long, default_value_t = -1, allow_negative_numbers = true, value_parser = clap::value_parser!(i64).range(-1..), help_heading = "Common options")]
         limit: i64,
     },
-    /// Write text content to an existing file
+    /// Write text content with Compile provenance
     Write {
         /// Viking URI
         #[arg(value_name = "uri")]
@@ -125,13 +125,8 @@ enum CompileCommand {
         /// ACL JSON, for example {"acl_mode":"restricted","entries":[]}
         #[arg(long, value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s))]
         acl: Option<serde_json::Value>,
-        /// Who made the edit, recorded in Compile output versions
-        #[arg(
-            long = "edit-source",
-            default_value = "agent",
-            value_parser = ["manual", "agent", "compile"],
-            help_heading = "Advanced options"
-        )]
+        /// Writes carry Compile provenance in output version history.
+        #[arg(skip = String::from("compile"))]
         edit_source: String,
     },
     /// Run content pattern search
@@ -657,6 +652,45 @@ enum CompileCommand {
         )]
         events_time_decay_protection: Option<String>,
     },
+    /// Query file and directory changes between snapshots
+    Snapshot {
+        #[command(subcommand)]
+        cmd: CompileSnapshotCommand,
+    },
+}
+
+/// Snapshot access is limited to reading file differences and changed source-file paths.
+#[derive(Subcommand)]
+enum CompileSnapshotCommand {
+    /// Compare one file between two snapshots
+    Diff {
+        /// viking:// URI of the file to compare
+        path: String,
+        /// Older commit oid, branch, or tag; omit to compare an empty file
+        #[arg(long = "from")]
+        from_ref: Option<String>,
+        /// Newer commit oid, branch, or tag
+        #[arg(long = "to")]
+        to_ref: String,
+    },
+    /// List changed source files under directories between two snapshots
+    DiffPaths {
+        /// Directory URIs (comma-separated)
+        #[arg(long, value_delimiter = ',', required = true, num_args = 1..)]
+        paths: Vec<String>,
+        /// Older commit oid, branch, or tag; omit to compare an empty tree
+        #[arg(long = "from")]
+        from_ref: Option<String>,
+        /// Newer commit oid, branch, or tag
+        #[arg(long = "to")]
+        to_ref: String,
+        /// Number of changed files to skip
+        #[arg(long, default_value_t = 0)]
+        offset: u32,
+        /// Maximum changed files per page (1–1000)
+        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u32).range(1..=1000))]
+        limit: u32,
+    },
 }
 
 /// Execute the restricted command set with a Bearer key; report failures and exit nonzero.
@@ -698,6 +732,39 @@ pub(super) async fn run() {
     );
 
     let result = match cli.command {
+        CompileCommand::Snapshot { cmd } => {
+            let cmd = match cmd {
+                CompileSnapshotCommand::Diff {
+                    path,
+                    from_ref,
+                    to_ref,
+                } => crate::SnapshotCmd::Diff {
+                    path,
+                    from_ref,
+                    to_ref,
+                },
+                CompileSnapshotCommand::DiffPaths {
+                    paths,
+                    from_ref,
+                    to_ref,
+                    offset,
+                    limit,
+                } => crate::SnapshotCmd::DiffPaths {
+                    paths,
+                    from_ref,
+                    to_ref,
+                    offset,
+                    limit,
+                },
+            };
+            crate::commands::snapshot::dispatch(
+                &ctx.get_client(),
+                cmd,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
         CompileCommand::Read { uri, offset, limit } => {
             handlers::handle_read(uri, offset, limit, ctx).await
         }
@@ -1003,7 +1070,7 @@ mod tests {
     use super::*;
     use clap::{Command, CommandFactory};
 
-    /// Captures the parsing behavior that must remain identical for shared CLI commands.
+    /// Captures shared parsing behavior; write provenance is fixed by this distribution.
     #[derive(Debug, PartialEq)]
     struct ArgumentContract {
         id: String,
@@ -1059,7 +1126,7 @@ mod tests {
     }
 
     #[test]
-    fn exposes_only_retrieval_and_content_write_commands() {
+    fn exposes_only_retrieval_content_write_and_snapshot_diffs() {
         let command = CompileCli::command();
         assert_eq!(command.get_name(), "ov");
 
@@ -1071,8 +1138,17 @@ mod tests {
         assert_eq!(
             names,
             [
-                "read", "write", "grep", "glob", "ls", "tree", "find", "search"
+                "read", "write", "grep", "glob", "ls", "tree", "find", "search", "snapshot"
             ]
+        );
+        assert_eq!(
+            command
+                .find_subcommand("snapshot")
+                .unwrap()
+                .get_subcommands()
+                .map(|command| command.get_name())
+                .collect::<Vec<_>>(),
+            ["diff", "diff-paths"]
         );
     }
 
@@ -1106,7 +1182,10 @@ mod tests {
 
             assert_eq!(
                 argument_contract(compile_command),
-                argument_contract(full_command),
+                argument_contract(full_command)
+                    .into_iter()
+                    .filter(|argument| name != "write" || argument.id != "edit_source")
+                    .collect::<Vec<_>>(),
                 "argument contract differs for {name}"
             );
             assert_eq!(
@@ -1115,10 +1194,29 @@ mod tests {
                 "aliases differ for {name}"
             );
         }
+        for name in ["diff", "diff-paths"] {
+            assert_eq!(
+                argument_contract(
+                    compile_cli
+                        .find_subcommand("snapshot")
+                        .unwrap()
+                        .find_subcommand(name)
+                        .unwrap()
+                ),
+                argument_contract(
+                    full_cli
+                        .find_subcommand("snapshot")
+                        .unwrap()
+                        .find_subcommand(name)
+                        .unwrap()
+                ),
+                "argument contract differs for snapshot {name}"
+            );
+        }
     }
 
     #[test]
-    fn parses_the_full_write_command_contract() {
+    fn parses_write_options_with_fixed_compile_provenance() {
         let cli = CompileCli::try_parse_from([
             "ov",
             "write",
@@ -1136,8 +1234,6 @@ mod tests {
             "append",
             "--acl",
             r#"{"acl_mode":"restricted","entries":[]}"#,
-            "--edit-source",
-            "manual",
         ])
         .expect("write command should parse");
 
@@ -1164,7 +1260,7 @@ mod tests {
                 assert_eq!(processing_mode, "vectors_only");
                 assert_eq!(tags, ["env=prod", "team=search"]);
                 assert_eq!(tag_mode, "append");
-                assert_eq!(edit_source, "manual");
+                assert_eq!(edit_source, "compile");
                 assert_eq!(
                     acl,
                     Some(serde_json::json!({"acl_mode": "restricted", "entries": []}))
@@ -1179,6 +1275,103 @@ mod tests {
         assert!(CompileCli::try_parse_from(["ov", "rm", "viking://resources/a"]).is_err());
         assert!(CompileCli::try_parse_from(["ov", "config"]).is_err());
         assert!(CompileCli::try_parse_from(["ov", "mv", "a", "b"]).is_err());
+        for command in ["commit", "restore", "ignore-set", "show", "log"] {
+            assert!(CompileCli::try_parse_from(["ov", "snapshot", command]).is_err());
+        }
+        for source in ["manual", "agent", "compile"] {
+            assert!(
+                CompileCli::try_parse_from([
+                    "ov",
+                    "write",
+                    "viking://resources/a.md",
+                    "--content",
+                    "hello",
+                    "--edit-source",
+                    source,
+                ])
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn parses_snapshot_diff_with_optional_base_and_required_path_and_target() {
+        let args = [
+            "ov",
+            "snapshot",
+            "diff",
+            "viking://resources/a.md",
+            "--to",
+            "main",
+        ];
+        let cli = CompileCli::try_parse_from(args).unwrap();
+        assert!(matches!(
+            cli.command,
+            CompileCommand::Snapshot {
+                cmd: CompileSnapshotCommand::Diff { path, from_ref: None, to_ref }
+            } if path == "viking://resources/a.md" && to_ref == "main"
+        ));
+        let cli = CompileCli::try_parse_from(args.into_iter().chain(["--from", "base"])).unwrap();
+        assert!(matches!(
+            cli.command,
+            CompileCommand::Snapshot {
+                cmd: CompileSnapshotCommand::Diff { from_ref: Some(from_ref), .. }
+            } if from_ref == "base"
+        ));
+        assert!(CompileCli::try_parse_from(["ov", "snapshot", "diff", "--to", "main"]).is_err());
+        assert!(
+            CompileCli::try_parse_from(["ov", "snapshot", "diff", "viking://resources/a.md"])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn parses_snapshot_diff_paths_and_validates_pagination() {
+        let args = [
+            "ov",
+            "snapshot",
+            "diff-paths",
+            "--paths",
+            "viking://resources/a,viking://resources/b",
+            "--to",
+            "main",
+        ];
+        let cli = CompileCli::try_parse_from(args).unwrap();
+        assert!(matches!(
+            cli.command,
+            CompileCommand::Snapshot {
+                cmd: CompileSnapshotCommand::DiffPaths { paths, from_ref: None, to_ref, offset: 0, limit: 100 }
+            } if paths == ["viking://resources/a", "viking://resources/b"] && to_ref == "main"
+        ));
+        let cli = CompileCli::try_parse_from(
+            args.into_iter()
+                .chain(["--from", "base", "--offset", "20", "--limit", "1000"]),
+        )
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            CompileCommand::Snapshot {
+                cmd: CompileSnapshotCommand::DiffPaths { from_ref: Some(from_ref), offset: 20, limit: 1000, .. }
+            } if from_ref == "base"
+        ));
+        for limit in ["0", "1001"] {
+            assert!(
+                CompileCli::try_parse_from(args.into_iter().chain(["--limit", limit])).is_err()
+            );
+        }
+        assert!(
+            CompileCli::try_parse_from(["ov", "snapshot", "diff-paths", "--to", "main"]).is_err()
+        );
+        assert!(
+            CompileCli::try_parse_from([
+                "ov",
+                "snapshot",
+                "diff-paths",
+                "--paths",
+                "viking://resources"
+            ])
+            .is_err()
+        );
     }
 
     #[test]
