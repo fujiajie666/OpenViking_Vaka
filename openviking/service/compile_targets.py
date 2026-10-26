@@ -24,6 +24,7 @@ import hashlib
 import heapq
 import json
 import random
+import re
 import sys
 import time
 from contextlib import asynccontextmanager
@@ -105,7 +106,7 @@ def new_record(target_id: str, to: str) -> Dict[str, Any]:
         "id": target_id,
         "to": to,
         "compile_type": "compile",  # Compile category for this target.
-        "conflicts_num": 0,  # Number of conflicting files under this target.
+        "conflicts_num": 0,  # Unfixed conflict records in non-hidden output files.
         "status": "active",
         "deleted_at": None,  # Last deletion time; retained on reactivation to reject old tasks.
         "from": [],
@@ -1087,6 +1088,44 @@ class CompileLifecycle:
             "skill_snapshot": run.get("skill_snapshot"),
         }
 
+    async def _count_conflicts(self, to: str, ctx: RequestContext) -> int:
+        """Count unfixed metadata records under ``to`` while the caller holds its tree lease.
+
+        Reserved CONFLICTS_CONTENT comments contain comma-separated JSON objects.
+        Hidden paths and files with unreadable or malformed metadata contribute zero.
+        """
+        files = [
+            entry["uri"]
+            for entry in await self._fs.tree(
+                to, show_all_hidden=False, node_limit=None, level_limit=None, ctx=ctx
+            )
+            if not entry["isDir"]
+            and not any(part.startswith(".") for part in entry["rel_path"].split("/"))
+        ]
+        total = 0
+        for start in range(0, len(files), 8):
+            contents = await asyncio.gather(
+                *(self._fs.read_file_bytes(uri, ctx=ctx) for uri in files[start : start + 8]),
+                return_exceptions=True,
+            )
+            for content in contents:
+                if isinstance(content, BaseException):
+                    if not isinstance(content, Exception):
+                        raise content
+                    continue
+                try:
+                    blocks = re.findall(rb"<!--\s*CONFLICTS_CONTENT\b(.*?)(-->|$)", content, re.S)
+                    if any(not closing for _, closing in blocks):
+                        continue
+                    total += sum(
+                        item.get("state") == "unfixed"
+                        for body, _ in blocks
+                        for item in json.loads(b"[" + body + b"]")
+                    )
+                except Exception:
+                    continue
+        return total
+
     async def on_finish(self, task: Any, snapshot: ExternalTaskSnapshot) -> ExternalTaskSnapshot:
         """Commit successful output and accept reindex before completing the run.
 
@@ -1153,6 +1192,21 @@ class CompileLifecycle:
                                 and (record.get("content_updated_at") or 0) < run["started_at"]
                             ):
                                 run["content_changed"] = True
+                else:
+                    if run["target_base"]:
+                        await self._rollback(request["to"], run, ctx)
+                    run["error"] = snapshot.error_message or snapshot.status
+                if self._task_is_current(record, task) and run["started_at"] is not None:
+                    run["conflicts_num"] = record.get("conflicts_num", 0)
+                    outputs = await self._store.get_outputs(account_id, target_id, task.task_id)
+                    changed = (
+                        (outputs or {}).get("content_changed")
+                        or any((run.get("result") or {}).get(key) for key in _RESULT_KEYS.values())
+                    )
+                    if not record["initialized"] or changed:
+                        async with self._locked_output(request["to"], ctx):
+                            run["conflicts_num"] = await self._count_conflicts(request["to"], ctx)
+                if run["status"] == "committing" and snapshot.status == "completed":
                     reindex_id = run.get("reindex_task_id")
                     previous = (
                         await get_task_tracker().get(
@@ -1175,10 +1229,6 @@ class CompileLifecycle:
                         ctx=ctx,
                         task_id=run["reindex_task_id"],
                     )
-                else:
-                    if run["target_base"]:
-                        await self._rollback(request["to"], run, ctx)
-                    run["error"] = snapshot.error_message or snapshot.status
                 run["status"] = snapshot.status
                 run["finished_at"] = time.time()
                 (run.get("changes") or {}).pop("scopes", None)
@@ -1201,6 +1251,8 @@ class CompileLifecycle:
                     and (record.get("last_run") or {}).get("task_id") == task_id
                 )
             ) and run is not None:
+                if run["started_at"] is not None:
+                    record["conflicts_num"] = run["conflicts_num"]
                 record["last_run"] = {
                     "task_id": task_id,
                     "status": run["status"],

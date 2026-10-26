@@ -166,12 +166,17 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     source, target = "viking://resources/source", "viking://resources/wiki"
     skill = f"viking://user/{ctx.user.user_id}/skills/wiki"
     page, picture = f"{target}/page.md", f"{target}/diagram.png"
+    retained = f"{target}/nested/retained.md"
+    conflict_comment = '<!-- CONFLICTS_CONTENT\n{"state":"unfixed"}, {"state":"fixed"}\n-->'
     png = b"\x89PNG\r\n\x1a\noriginal"
     for uri, content in {
         f"{source}/a.md": "source",
         f"{skill}/SKILL.md": "Build a wiki",
         f"{target}/old.md": "keep renamed",
         f"{target}/discard.md": "remove",
+        retained: conflict_comment,
+        f"{target}/.hidden.md": conflict_comment,
+        f"{target}/.hidden/page.md": conflict_comment,
         "viking://resources/inbox/note.md": "keep imported",
         "viking://resources/inbox/copy.md": "keep copied",
         picture: png,
@@ -204,12 +209,18 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     monkeypatch.setattr("openviking.service.fs_service.vectorize_directory_meta", AsyncMock())
     monkeypatch.setattr(service.viking_fs, "_schedule_restore_reindex_for_paths", AsyncMock())
     service.compile.configure_local_backend("http://localhost:1", "")
+    counter = AsyncMock(wraps=service.compile.lifecycle._count_conflicts)
+    monkeypatch.setattr(service.compile.lifecycle, "_count_conflicts", counter)
     calls = []
     runtime_status = "completed"
+    generated_conflicts = conflict_comment
 
     async def generate(payload, **kwargs):
         calls.append(payload["payload"])
-        operations = [{"uri": page, "content": "generated"}]
+        operations = [
+            {"uri": page, "content": "generated"},
+            {"uri": f"{target}/conflicts.md", "content": generated_conflicts},
+        ]
         if runtime_status == "failed":
             operations.append({"uri": f"{target}/partial.md", "content": "unfinished"})
         await service.fs.batch_write(
@@ -283,6 +294,11 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     await service.compile._tasks.execute(first, **owner)
     assert (await tracker.get(first, **owner)).status == "completed"
     assert await service.fs.read(page, ctx) == "generated"
+    assert (await service.compile.get_config(target, ctx))["conflicts_num"] == 2
+    assert (await service.compile.list_configs(ctx))[0]["conflicts_num"] == 2
+    initial_history = await service.compile.list_operations(target, ctx, limit=20, cursor=None)
+    assert initial_history["operations"][0]["conflicts_num"] == 2
+    assert counter.await_count == 1
     recovery = await client.get("/api/v1/compile/submissions/compile-initial-key")
     assert recovery.json()["result"]["task_id"] == first
     assert isinstance((await client.get("/api/v1/tasks")).json()["result"], list)
@@ -310,16 +326,50 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
 
     unchanged = await submit(payload, "compile-unchanged-key")
     assert (await tracker.get(unchanged, **owner)).status == "completed" and len(calls) == 1
+    assert (await service.compile.get_config(target, ctx))["conflicts_num"] == 2
+    assert counter.await_count == 1
     payload = {**payload, "instruction": "Change the title"}
+    generated_conflicts = "resolved"
     await submit(payload, "compile-instruction-key")
     assert len(calls) == 2 and calls[-1]["args"]["changes"]["execution"]["mode"] == "full"
+    assert (await service.compile.get_config(target, ctx))["conflicts_num"] == 1
+    assert counter.await_count == 2
+    generated_conflicts = '<!-- CONFLICTS_CONTENT\n{"state":"unfixed"}, {"state":\n-->'
+    invalid_metadata = await submit(
+        {**payload, "args": {**payload["args"], "mode": "full"}}, "compile-invalid-metadata-key"
+    )
+    assert (await tracker.get(invalid_metadata, **owner)).status == "completed"
+    assert (await service.compile.get_config(target, ctx))["conflicts_num"] == 1
     await service.viking_fs.write_file(f"{source}/a.md", "new source", ctx=admin)
+    await service.viking_fs.write_file(retained, "resolved", ctx=admin)
+    generated_conflicts = "resolved after source update"
     await submit(payload, "compile-source-update-key")
+    assert (await service.compile.get_config(target, ctx))["conflicts_num"] == 0
+    assert counter.await_count == 4
     changes = calls[-1]["args"]["changes"]
     assert changes["execution"]["mode"] == "incremental"
     assert changes["scopes"] == [
         {"uri": f"{source}/a.md", "change_type": "modified", "recursive": False}
     ]
+
+    generated_conflicts = conflict_comment
+    service.reindex.side_effect = RuntimeError("reindex unavailable")
+    response = await client.post(
+        "/api/v1/compile",
+        json={**payload, "instruction": "Cancel during finalization"},
+        headers={"Idempotency-Key": "compile-cancel-finalization-key"},
+    )
+    assert response.status_code == 202, response.text
+    cancelling = response.json()["result"]["task_id"]
+    with pytest.raises(RuntimeError, match="reindex unavailable"):
+        await service.compile._tasks.execute(cancelling, **owner)
+    service.reindex.side_effect = None
+    await service.compile._tasks._apply_snapshot(
+        external.ExternalTaskSnapshot(status="cancelled"), task_id=cancelling, **owner
+    )
+    assert (await tracker.get(cancelling, **owner)).status == "cancelled"
+    assert (await service.compile.get_config(target, ctx))["conflicts_num"] == 0
+    assert await service.fs.read(f"{target}/conflicts.md", ctx) == "resolved after source update"
 
     runtime_status = "failed"
     failed = await submit({**payload, "instruction": "Regenerate"}, "compile-failure-key")
