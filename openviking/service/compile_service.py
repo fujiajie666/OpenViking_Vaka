@@ -600,6 +600,34 @@ class CompileService:
     async def get_config(self, to: str, ctx: RequestContext) -> dict[str, Any]:
         return self._config_view(await self._target(to, ctx))
 
+    async def list_conflicts(
+        self, uri: str, ctx: RequestContext, *, offset: int, limit: int
+    ) -> dict[str, Any]:
+        """Return all-state conflict pages and an unfixed count for any readable directory.
+
+        Missing or inaccessible directories retain normal filesystem errors; files
+        are rejected. The query requires no Compile registration or write access.
+        """
+        target = validate_request_viking_uri(resolve_path_variables(uri), ctx)
+        if not (await self._fs.stat(target, ctx, skip_count=True)).get("isDir"):
+            raise InvalidArgumentError("Conflict queries require a directory")
+        return await self._require_lifecycle().list_conflicts(
+            target, ctx, offset=offset, limit=limit
+        )
+
+    async def list_files(
+        self, uri: str, ctx: RequestContext, *, offset: int, limit: int
+    ) -> dict[str, Any]:
+        """Page readable files under a directory without requiring write permission.
+
+        Files and missing directories retain normal validation/filesystem errors.
+        Files without a recorded version return a null current_version.
+        """
+        target = validate_request_viking_uri(resolve_path_variables(uri), ctx)
+        if not (await self._fs.stat(target, ctx, skip_count=True)).get("isDir"):
+            raise InvalidArgumentError("File listings require a directory")
+        return await self._require_lifecycle().list_files(target, ctx, offset=offset, limit=limit)
+
     async def update_config(self, body: "CompileConfigUpdate", ctx: RequestContext) -> dict:
         lifecycle = self._require_lifecycle()
         record = await self._target(body.to, ctx)

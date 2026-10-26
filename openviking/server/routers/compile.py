@@ -70,6 +70,20 @@ async def list_compile_configs(ctx: RequestContext = Depends(get_request_context
     return Response(status="ok", result={"targets": await get_service().compile.list_configs(ctx)})
 
 
+@router.get("/compile/conflicts")
+async def list_compile_conflicts(
+    uri: str = Query(..., min_length=1, description="Directory Viking URI"),
+    offset: int = Query(0, ge=0, description="Number of conflict records to skip"),
+    limit: int = Query(20, ge=1, le=100),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """List visible conflicts of every state with the directory's unfixed count."""
+    return Response(
+        status="ok",
+        result=await get_service().compile.list_conflicts(uri, ctx, offset=offset, limit=limit),
+    )
+
+
 @router.get("/compile/operations")
 async def list_compile_operations(
     to: str = Query(..., min_length=1),
@@ -79,6 +93,20 @@ async def list_compile_operations(
 ):
     result = await get_service().compile.list_operations(to, ctx, limit=limit, cursor=cursor)
     return Response(status="ok", result=result)
+
+
+@router.get("/compile/files")
+async def list_compile_files(
+    uri: str = Query(..., min_length=1, description="Directory Viking URI"),
+    offset: int = Query(0, ge=0, description="Number of files to skip"),
+    limit: int = Query(20, ge=1, le=100),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """List visible files with relative directories, latest versions and modification times."""
+    return Response(
+        status="ok",
+        result=await get_service().compile.list_files(uri, ctx, offset=offset, limit=limit),
+    )
 
 
 @router.get("/compile/operations/{operation_id}/outputs")

@@ -1088,27 +1088,80 @@ class CompileLifecycle:
             "skill_snapshot": run.get("skill_snapshot"),
         }
 
+    async def list_files(
+        self, to: str, ctx: RequestContext, *, offset: int, limit: int
+    ) -> Dict[str, Any]:
+        """Page non-hidden readable files in URI order, loading only their version indexes.
+
+        relative_dir omits the filename and is '/' at the query root. current_version
+        is the latest recorded version or None; updated_at is the filesystem modTime.
+        """
+        files = sorted(
+            (
+                entry
+                for entry in await self._fs.tree(
+                    to, show_all_hidden=False, node_limit=None, level_limit=None, ctx=ctx
+                )
+                if not entry["isDir"]
+                and entry.get("access") != "denied"
+                and not any(part.startswith(".") for part in entry["rel_path"].split("/"))
+            ),
+            key=lambda entry: entry["uri"],
+        )
+        target = await self.versions.owning_target(ctx.account_id, to)
+        page = []
+        for entry in files[offset : offset + limit]:
+            index = (
+                await self.versions.load(ctx.account_id, target["id"], entry["uri"])
+                if target
+                else None
+            )
+            versions = (index or {}).get("versions", [])
+            parent = entry["rel_path"].rpartition("/")[0]
+            page.append(
+                {
+                    "uri": entry["uri"],
+                    "relative_dir": f"{parent}/" if parent else "/",
+                    "current_version": versions[-1]["version_id"] if versions else None,
+                    "updated_at": entry["modTime"],
+                }
+            )
+        return {"total": len(files), "files": page, "has_more": offset + len(page) < len(files)}
+
     async def _count_conflicts(self, to: str, ctx: RequestContext) -> int:
         """Count unfixed metadata records under ``to`` while the caller holds its tree lease.
 
-        Reserved CONFLICTS_CONTENT comments contain comma-separated JSON objects.
-        Hidden paths and files with unreadable or malformed metadata contribute zero.
+        Count-only scans retain no detail records. Unreadable or malformed files contribute zero.
         """
-        files = [
+        return (await self.list_conflicts(to, ctx, limit=0))["conflicts_num"]
+
+    async def list_conflicts(
+        self, to: str, ctx: RequestContext, *, offset: int = 0, limit: int = 20
+    ) -> Dict[str, Any]:
+        """Read visible conflict records, ordered by file URI and annotation order.
+
+        ``offset`` and ``limit`` select records, not files; zero limit only counts.
+        The total counts only unfixed records; pages include every conflict state.
+        Reserved comments contain comma-separated JSON objects. Hidden paths and
+        unreadable or malformed files are skipped. Reads use the caller's identity.
+        """
+        files = sorted(
             entry["uri"]
             for entry in await self._fs.tree(
                 to, show_all_hidden=False, node_limit=None, level_limit=None, ctx=ctx
             )
             if not entry["isDir"]
             and not any(part.startswith(".") for part in entry["rel_path"].split("/"))
-        ]
+        )
         total = 0
+        position = 0
+        conflicts = []
         for start in range(0, len(files), 8):
             contents = await asyncio.gather(
                 *(self._fs.read_file_bytes(uri, ctx=ctx) for uri in files[start : start + 8]),
                 return_exceptions=True,
             )
-            for content in contents:
+            for uri, content in zip(files[start : start + 8], contents, strict=True):
                 if isinstance(content, BaseException):
                     if not isinstance(content, Exception):
                         raise content
@@ -1117,14 +1170,23 @@ class CompileLifecycle:
                     blocks = re.findall(rb"<!--\s*CONFLICTS_CONTENT\b(.*?)(-->|$)", content, re.S)
                     if any(not closing for _, closing in blocks):
                         continue
-                    total += sum(
-                        item.get("state") == "unfixed"
-                        for body, _ in blocks
-                        for item in json.loads(b"[" + body + b"]")
-                    )
+                    records = [
+                        item for body, _ in blocks for item in json.loads(b"[" + body + b"]")
+                    ]
+                    if any(not isinstance(item, dict) for item in records):
+                        continue
                 except Exception:
                     continue
-        return total
+                for item in records:
+                    if offset <= position < offset + limit:
+                        conflicts.append({**item, "uri": uri})
+                    position += 1
+                    total += item.get("state") == "unfixed"
+        return {
+            "conflicts_num": total,
+            "conflicts": conflicts,
+            "has_more": offset + len(conflicts) < position,
+        }
 
     async def on_finish(self, task: Any, snapshot: ExternalTaskSnapshot) -> ExternalTaskSnapshot:
         """Commit successful output and accept reindex before completing the run.
