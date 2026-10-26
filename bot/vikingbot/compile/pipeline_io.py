@@ -367,7 +367,12 @@ class JsonModel:
 
     async def _ask(self, stage, system, data, schema, validate, *, agent, readers):
         """Run a stage with scoped readers; return validated output and cache eligible results."""
-        if schema is FileResponse and stage != "skill_repair":
+        if (
+            schema is FileResponse
+            and stage != "skill_repair"
+            and not (agent and stage == "reduce_merge")
+            and self.fits(system, data, schema)
+        ):
             # Inline original excerpts when located; unlocated records retain full shards.
             # The scoped reader can expand partial evidence without catalog access.
             evidence = EvidenceReader(self.files, data)

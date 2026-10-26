@@ -101,6 +101,7 @@ async def resolve_files(runtime: Pipeline, references: list[str]) -> list[str]:
     Concurrent decisions reserve renamed paths before saving; a competing reservation
     uses the shared retry allowance with the current path set. Failed decisions stay unpublished; successful
     unrelated outputs remain available for partial recovery. Candidates stay on disk.
+    Oversized collisions use a file-backed agent without prescribing semantic batches.
     """
     candidates = {}
     for reference in references:
@@ -140,22 +141,31 @@ async def resolve_files(runtime: Pipeline, references: list[str]) -> list[str]:
                 ),
             )
             retries = Counter()
+            system = runtime.system + "\n" + transform.instructions
+            data = {
+                "candidates": [file_ops.file_view(a, ref) for ref, a in items],
+                "inputs": [await common.payload(runtime, r) for r in records],
+            }
+            agent = False
             while True:
                 unavailable = sorted(p for p, owner in reserved.items() if owner != path)
+                data["reserved_paths"] = unavailable
+                agent = agent or not runtime.model.fits(system, data, FileResponse)
                 try:
                     response = await runtime.model.ask(
                         "reduce_merge",
-                        runtime.system + "\n" + transform.instructions,
-                        {
-                            "candidates": [file_ops.file_view(a, ref) for ref, a in items],
-                            "reserved_paths": unavailable,
-                            "inputs": [await common.payload(runtime, r) for r in records],
-                        },
+                        system,
+                        data,
                         FileResponse,
                         validate,
-                        agent=transform.execution == "agent",
+                        agent=agent,
                     )
                     validate(response)
+                except ModelCallError as exc:
+                    if agent or model_error_kind(exc) is not ModelErrorKind.INPUT_TOO_LARGE:
+                        raise
+                    # A provider rejection overrides the estimate for every reservation retry.
+                    agent = True
                 except ValueError as exc:
                     if unavailable == sorted(
                         p for p, owner in reserved.items() if owner != path

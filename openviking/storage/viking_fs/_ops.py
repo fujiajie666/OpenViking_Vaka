@@ -16,6 +16,7 @@ from openviking.core.namespace import (
     uri_parts,
 )
 from openviking.pyagfs.exceptions import (
+    AGFSAlreadyExistsError,
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
     AGFSHTTPError,
@@ -199,19 +200,26 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
         lease_ref: Dict[str, Any] | None = None,
     ) -> None:
-        """Create directory."""
+        """Create a directory; exist_ok accepts only a confirmed existing directory."""
         await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
         # Always ensure parent directories exist before creating this directory
         await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
+        fs_ctx = self._pathlock_fs_ctx(ctx, lease_ref)
         try:
-            await self._async_agfs.mkdir(path, fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref))
+            await self._async_agfs.mkdir(path, fs_ctx=fs_ctx)
         except Exception as exc:
-            message = str(exc).lower()
-            already_exists = "exist" in message or "already" in message
-            if exist_ok and already_exists:
-                return
-            raise
+            already_exists = isinstance(exc, (AGFSAlreadyExistsError, FileExistsError))
+            # Untyped client errors require an explicit existence message and directory check.
+            if type(exc) in {Exception, RuntimeError, AGFSClientError}:
+                already_exists = any(
+                    marker in str(exc).lower() for marker in ("already exists", "file exists")
+                )
+            if not exist_ok or not already_exists:
+                raise
+            # AlreadyExists can also name a regular file; never accept that as a directory.
+            if not (await self._async_agfs.stat(path, fs_ctx=fs_ctx)).get("isDir"):
+                raise
 
     async def rm(
         self,
@@ -1949,38 +1957,11 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
         lease_ref: Dict[str, Any] | None = None,
     ) -> None:
-        """Recursively create all parent directories."""
-        try:
-            await self._async_agfs.ensure_parent_dirs(
-                path,
-                fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
-            )
-        except Exception as e:
-            logger.debug(f"Failed to ensure parent directories for {path}: {e}")
-            parent = path.rstrip("/").rsplit("/", 1)[0]
-            await self._mkdir_path_with_parents(parent, ctx=ctx, lease_ref=lease_ref)
-
-    async def _mkdir_path_with_parents(
-        self,
-        dir_path: str,
-        ctx: Optional[RequestContext] = None,
-        lease_ref: Dict[str, Any] | None = None,
-    ) -> None:
-        """Create a directory path segment-by-segment using the same fs context."""
-        parts = [part for part in dir_path.strip("/").split("/") if part]
-        current = ""
-        for part in parts:
-            current = f"{current}/{part}"
-            try:
-                await self._async_agfs.mkdir(
-                    current,
-                    fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
-                )
-            except Exception as e:
-                message = str(e).lower()
-                if "exist" in message or "already" in message:
-                    continue
-                logger.debug(f"Failed to create parent directory {current}: {e}")
+        """Create parents through the backend's idempotent operation, propagating failures."""
+        await self._async_agfs.ensure_parent_dirs(
+            path,
+            fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
+        )
 
     # ========== Batch Read (backward compatible) ==========
 

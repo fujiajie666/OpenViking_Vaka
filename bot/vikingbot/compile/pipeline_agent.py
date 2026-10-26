@@ -16,7 +16,7 @@ from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.compile import file_ops
 from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.models import COMPILE_DRAFT_ROOT
-from vikingbot.compile.pipeline_io import ROOT, TaskFiles, retry_allowed
+from vikingbot.compile.pipeline_io import ROOT, ModelCallError, TaskFiles, retry_allowed
 from vikingbot.compile.renderer import validate_relative_file_path
 from vikingbot.compile.results import FileResponse, RecordResponse
 from vikingbot.compile.schemas import result_schema
@@ -27,11 +27,12 @@ from vikingbot.providers.base import LLMProvider
 class ChildProvider(LLMProvider):
     """Route each child request through the task's bounded, metered provider calls."""
 
-    def __init__(self, model, schema, stage="agent", *, submit=None):
+    def __init__(self, model, schema, stage="agent", *, submit=None, context=None):
         super().__init__()
         self.model = model
         self.stage = stage
         self.submit = submit
+        self.context = context
         self.failures = Counter()
 
     def get_default_model(self):
@@ -40,6 +41,8 @@ class ChildProvider(LLMProvider):
     async def chat(self, messages, tools=None, **kwargs):
         """Retry truncated output without executing incomplete tool calls."""
         while True:
+            if self.context is not None:
+                await self.context.bound_messages(messages, tools)
             response = await self.model.call(
                 self.stage, messages, tools, max_tokens=self.model.max_tokens
             )
@@ -61,20 +64,144 @@ async def complete_tool_result(result, session_key):
     return result
 
 
+class ScopedReadTool(Tool):
+    """Page private file reads by Unicode characters, including files with very long lines.
+
+    Line selection remains owned by the bound read tool. Character offsets address
+    that selected text; a non-null next_offset_chars permits lossless continuation.
+    """
+
+    def __init__(self, tool, max_chars):
+        self.tool, self.max_chars = tool, max_chars
+
+    @property
+    def name(self):
+        return self.tool.name
+
+    @property
+    def description(self):
+        return self.tool.description + " Returns a bounded text page; follow next_offset_chars."
+
+    @property
+    def parameters(self):
+        parameters = copy(self.tool.parameters)
+        parameters["properties"] = dict(parameters["properties"])
+        parameters["properties"].update(
+            offset_chars={
+                "type": "integer",
+                "minimum": 0,
+                "description": "Zero-based character offset within the selected lines.",
+            },
+            limit_chars={
+                "type": "integer",
+                "minimum": 1,
+                "maximum": self.max_chars,
+                "description": "Maximum characters in this page; defaults to the page budget.",
+            },
+        )
+        return parameters
+
+    async def execute(self, tool_context, *, offset_chars=0, limit_chars=None, **kwargs):
+        """Read a bounded page without changing the wrapped tool's path permissions."""
+        if offset_chars < 0 or (limit_chars is not None and limit_chars < 1):
+            raise ValueError("Character offset must be nonnegative and limit must be positive")
+        text = await self.tool.execute(tool_context, **kwargs)
+        end = min(len(text), offset_chars + min(limit_chars or self.max_chars, self.max_chars))
+        return json.dumps(
+            {
+                "text": text[offset_chars:end],
+                "offset_chars": offset_chars,
+                "next_offset_chars": end if end < len(text) else None,
+                "total_chars": len(text),
+            },
+            ensure_ascii=False,
+        )
+
+
+class FileContext:
+    """Keep collision-agent requests bounded with reversible private-file history.
+
+    Complete tool exchanges are archived together to preserve call/response pairing.
+    The original task and fixed instructions remain in context; oversized fixed
+    content fails locally. Archive paths remain discoverable in context-history.json.
+    """
+
+    def __init__(self, model, root):
+        self.model, self.root = model, root
+        self.sandbox = model.files.sandbox
+        self.history = []
+        self.page_chars = max(1, (model.budget - model.reserve - 1200) // 8)
+
+    async def store(self, content, suffix):
+        """Save complete text, update the archive index and return the private relative path."""
+        path = f"history-{len(self.history)}.{suffix}"
+        await self.sandbox.write_file(f"{self.root}/{path}", content)
+        self.history.append(path)
+        await self.sandbox.write_file(
+            f"{self.root}/context-history.json", json.dumps(self.history, ensure_ascii=False)
+        )
+        return path
+
+    async def preview_result(self, result, session_key):
+        """Replace oversized tool text with a handle to its complete, pageable content."""
+        text = result if isinstance(result, str) else str(result)
+        # JSON page envelopes and escaped text must remain readable without being re-spilled.
+        if len(text) <= self.page_chars * 2 + 512:
+            return result
+        path = await self.store(text, "txt")
+        return json.dumps({"content_file": path, "total_chars": len(text)}, ensure_ascii=False)
+
+    async def bound_messages(self, messages, tools):
+        """Archive oldest complete exchanges in place before any provider call or retry."""
+        overhead = len(json.dumps(tools, ensure_ascii=False)) + self.model.reserve + 1200
+        while len(json.dumps(messages, ensure_ascii=False)) + overhead > self.model.budget:
+            for start, message in enumerate(messages):
+                if message.get("role") != "assistant" or not message.get("tool_calls"):
+                    continue
+                end = start + 1
+                while end < len(messages) and messages[end].get("role") == "tool":
+                    end += 1
+                expected = {call["id"] for call in message["tool_calls"]}
+                delivered = {item.get("tool_call_id") for item in messages[start + 1 : end]}
+                if expected == delivered:
+                    break
+            else:
+                raise ModelCallError("Collision agent fixed context exceeds the request budget")
+            await self.store(json.dumps(messages[start:end], ensure_ascii=False, indent=2), "json")
+            notice = {
+                "role": "user",
+                "content": '{"archived_tool_exchanges":"context-history.json"}',
+            }
+            messages[start:end] = [] if notice in messages else [notice]
+
+
 async def prepare_assignment(data, sandbox, root):
     """Store an oversized assignment in private scratch, replacing source bodies with read handles.
 
-    The caller retains the full data for lineage validation and enables evidence reads.
+    Return only a manifest handle; the caller retains full data for lineage validation.
     Candidate bodies use text files so line-based reads do not expand an entire JSON string.
     """
     assignment = {k: v for k, v in data.items() if k != "original_evidence"}
     assignment["inputs"] = []
-    for item in data.get("inputs", []):
+    for index, item in enumerate(data.get("inputs", [])):
         payload = item.get("payload", {})
+        path = f"input-{index}.json"
+        await sandbox.write_file(
+            f"{root}/{path}", json.dumps(payload, ensure_ascii=False, indent=2)
+        )
         if "text" in payload and "uri" in payload:
-            payload = {k: v for k, v in payload.items() if k != "text"}
-            payload["source_ranges"] = [item["id"]]
-        assignment["inputs"].append({**item, "payload": payload})
+            payload = {"uri": payload["uri"], "source_ranges": [item["id"]]}
+        else:
+            payload = {k: payload[k] for k in ("source_ranges", "evidence_spans") if k in payload}
+        view = {**item, "payload": payload, "payload_file": path}
+        if item.get("ready_file", {}).get("content") is not None:
+            ready_path = f"ready-{index}.txt"
+            await sandbox.write_file(f"{root}/{ready_path}", item["ready_file"]["content"])
+            view["ready_file"] = {
+                **{k: v for k, v in item["ready_file"].items() if k != "content"},
+                "content_file": ready_path,
+            }
+        assignment["inputs"].append(view)
     if "candidates" in data:
         assignment["candidates"] = []
         for index, candidate in enumerate(data["candidates"]):
@@ -91,8 +218,8 @@ async def prepare_assignment(data, sandbox, root):
     )
     return {
         "assignment_file": "assignment.json",
-        "instructions": "Read assignment.json with read_file offset/limit. Read source_ranges with read_evidence; "
-        "source text is not included. Read candidate content_file paths in ranges. "
+        "instructions": "Read assignment.json in ranges with read_file. Read payload_file and content_file "
+        "paths for complete input records and candidate bodies. Use read_evidence for assigned original sources. "
         "Process all assigned inputs before submitting the complete result.",
     }
 
@@ -262,6 +389,7 @@ def agent_runner(loop, session_key, connection, limits):
         child_id = uuid.uuid4().hex
         final_review = stage == "final_review_agent"
         root = ROOT if final_review else f"{COMPILE_DRAFT_ROOT}/{child_id}"
+        context = FileContext(model, root) if stage == "reduce_merge_agent" else None
         evidence = EvidenceReader(model.files, data)
         submit = EmitResult(
             schema,
@@ -272,7 +400,7 @@ def agent_runner(loop, session_key, connection, limits):
             model.metrics,
         )
         assignment = data
-        if not model.fits(system, data, schema):
+        if context is not None or not model.fits(system, data, schema):
             assignment = await prepare_assignment(data, model.files.sandbox, root)
             evidence.delivered.clear()
         registry = ToolRegistry(config=loop.config)
@@ -307,7 +435,11 @@ def agent_runner(loop, session_key, connection, limits):
                         return await _execute(tool_context, **arguments)
 
                     bound.execute = write_artifact
-                registry.register(bound)
+                registry.register(
+                    ScopedReadTool(bound, context.page_chars)
+                    if context is not None and name == "read_file"
+                    else bound
+                )
         tool = None if final_review else loop.tools.get("exec")
         if (
             loop.config.sandbox.backend == "direct"
@@ -321,8 +453,8 @@ def agent_runner(loop, session_key, connection, limits):
                 "\nUse exec with pipelines, Python or shell commands when they improve efficiency."
             )
         child = copy(loop)
-        child.provider = ChildProvider(model, schema, stage, submit=submit)
-        child._preview_tool_result = complete_tool_result
+        child.provider = ChildProvider(model, schema, stage, submit=submit, context=context)
+        child._preview_tool_result = context.preview_result if context else complete_tool_result
         instructions = (
             "\nUse emit to submit. Supplied Skill attachments are complete; "
             "they fulfill the Skill's reading requirements without a tool call. Do not reread them. "
@@ -341,6 +473,13 @@ def agent_runner(loop, session_key, connection, limits):
         )
         if stage == "map_agent" or final_review:
             instructions = ""  # These stages define their own file access and submission rules.
+        if context is not None:
+            instructions += (
+                "\nFile reads return text pages; follow next_offset_chars with offset_chars until null. "
+                "Large tool results use content_file handles. Earlier tool exchanges remain in "
+                "context-history.json and its listed files. Save accumulated outputs and remaining "
+                "work in scratch files so they can be resumed without retaining all read text."
+            )
         await child._run_agent_loop(
             messages=[
                 {

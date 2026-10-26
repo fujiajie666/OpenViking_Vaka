@@ -260,13 +260,18 @@ def _sdk_kind(error: BaseException) -> tuple[ModelErrorKind, str] | None:
             "AuthenticationError": ModelErrorKind.AUTHENTICATION_ERROR,
             "PermissionDeniedError": ModelErrorKind.PERMISSION_DENIED,
             "NotFoundError": ModelErrorKind.MODEL_NOT_FOUND,
-            "BadRequestError": ModelErrorKind.INVALID_REQUEST,
             "ContentPolicyViolationError": ModelErrorKind.CONTENT_SAFETY,
             "ContextWindowExceededError": ModelErrorKind.INPUT_TOO_LARGE,
             "ServiceUnavailableError": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
             "InternalServerError": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
         }
-        return _kind_from_code(error) or class_kinds.get(name, ModelErrorKind.UNKNOWN), provider
+        # Generic request errors use HTTP status; specialized SDK errors retain their semantics.
+        kind = (
+            _kind_from_code(error)
+            or class_kinds.get(name)
+            or _kind_from_status(_status_code(error))
+        )
+        return kind or ModelErrorKind.UNKNOWN, provider
 
     if module.startswith("google.genai"):
         kind = _kind_from_code(error)

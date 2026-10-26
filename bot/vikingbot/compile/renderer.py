@@ -645,27 +645,33 @@ def _render_source_fallback(
 
 
 def validate_relative_page_path(path: str) -> str:
-    relative = sanitize_relative_viking_path(path).strip("/")
+    """Validate raw output path segments before appending a missing Markdown extension."""
+    relative = validate_relative_file_path(path)
     if not relative.lower().endswith(".md"):
         relative += ".md"
-    segments = [segment for segment in relative.split("/") if segment]
-    if not segments or any(segment.startswith(".") for segment in segments):
-        raise ValueError(f"invalid Wiki page path: {path}")
-    if segments[-1].lower() in _RESERVED_FILENAMES:
-        raise ValueError(f"reserved Wiki page path: {path}")
-    return "/".join(segments)
+    return relative
 
 
 def validate_relative_file_path(path: str) -> str:
-    """Validate an output-relative path, rejecting metadata and internal staging directories."""
-    relative = sanitize_relative_viking_path(path).strip("/")
+    """Return an output-relative path or raise ValueError for unsafe names.
+
+    Normalize Windows separators without renaming segments. Reject surrounding
+    whitespace, trailing dots and ASCII control characters that make stored names unstable,
+    as well as metadata and internal staging directories.
+    """
+    relative = sanitize_relative_viking_path(path)
     segments = relative.split("/")
     if (
         not relative
         or any(not segment or segment in {".", ".."} for segment in segments)
         or any(segment.startswith(".") for segment in segments)
+        or any(segment != segment.strip() or segment.endswith(".") for segment in segments)
+        or any(ord(character) < 32 or ord(character) == 127 for character in relative)
     ):
-        raise ValueError(f"invalid output file path: {path}")
+        raise ValueError(
+            f"invalid output file path: {path!r}; segments must be nonempty, "
+            "without leading/trailing whitespace, trailing dots or ASCII control characters"
+        )
     if segments[-1].lower() in _RESERVED_FILENAMES:
         raise ValueError(f"reserved output file path: {path}")
     if COMPILE_STAGING_ROOT.casefold() in (segment.casefold() for segment in segments):
