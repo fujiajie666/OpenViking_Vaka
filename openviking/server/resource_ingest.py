@@ -40,6 +40,11 @@ class AddResourceRequest(BaseModel):
     and therefore requires both a positive interval and an explicit target.
     ``wait`` and ``internal_task`` are transport defaults that callers may
     override when the resource is imported as part of another operation.
+
+    ``connector_auth_config`` is an OpenViking-managed private credential channel
+    injected by the data plane for saved-credential OAuth imports. It carries only
+    ``openviking_credential_ref``, a secret-free reference resolved into the current
+    Connector ``auth_config`` for each import or watch round.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -53,6 +58,11 @@ class AddResourceRequest(BaseModel):
     reason: str = ""
     instruction: str = ""
     wait: bool = False
+    timeout: float | None = Field(
+        default=None,
+        deprecated=True,
+        description="Deprecated compatibility parameter; accepted and ignored.",
+    )
     strict: bool = False
     internal_task: bool = False
     source_name: Optional[str] = None
@@ -62,6 +72,7 @@ class AddResourceRequest(BaseModel):
     directly_upload_media: bool = True
     preserve_structure: Optional[bool] = None
     args: Dict[str, Any] = Field(default_factory=dict)
+    connector_auth_config: Optional[Dict[str, Any]] = None
     telemetry: TelemetryRequest = False
     watch_interval: float = 0
     is_active: bool = True
@@ -201,6 +212,7 @@ async def ingest_resource_request(
             internal_task=internal_task,
             is_active=request.is_active,
             args=request.args,
+            connector_auth_config=request.connector_auth_config,
             shared_source=shared_source_ref,
             **kwargs,
         )
