@@ -15,6 +15,7 @@ from openviking.server.app import create_app
 from openviking.server.auth import get_request_context
 from openviking.server.config import ServerConfig
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.acl import AclMode
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     InvalidURIError,
@@ -229,14 +230,24 @@ async def test_restore_acl_and_reindex_identity(client_with_resource, service, m
             {"principal": "user:snapshot_reader", "level": "read"},
         ],
         ctx=admin,
+        acl_mode=AclMode.RESTRICTED,
     )
     await service.fs.write(file_uri, content="v1", mode="create", wait=True, ctx=admin)
     v1 = await service.fs.commit(message="acl restore v1", paths=[root], ctx=writer)
 
     assert await service.fs.show(v1["commit_oid"], path=file_uri, ctx=reader)
     assert await service.fs.log(paths=[root], ctx=reader)
+    reader_snapshot = await service.fs.commit(message="reader snapshot", paths=[root], ctx=reader)
+    assert reader_snapshot["result"] == "noop"
     with pytest.raises(PermissionDeniedError):
-        await service.fs.commit(message="reader cannot commit", paths=[root], ctx=reader)
+        await service.fs.commit(
+            message="unreadable snapshot",
+            paths=[root],
+            ctx=RequestContext(
+                user=UserIdentifier(admin.account_id, "snapshot_outsider"),
+                role=Role.USER,
+            ),
+        )
 
     await service.fs.write(file_uri, content="v2", mode="replace", wait=True, ctx=writer)
     await service.fs.commit(message="acl restore v2", paths=[root], ctx=writer)
