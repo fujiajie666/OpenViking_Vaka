@@ -2365,8 +2365,8 @@ class FSService:
     ) -> Dict[str, Any]:
         """Page changed source URIs between snapshots; a null base means an empty tree.
 
-        Every changed path requires current read permission, including deleted paths.
-        Any denied descendant rejects the whole query without exposing its URI.
+        GLOBAL's memories grant applies; other paths require current read access.
+        Any denied path rejects the whole query before pagination.
         """
         viking_fs = self._ensure_initialized()
         if not paths or not to_ref.strip() or (from_ref is not None and not from_ref.strip()):
@@ -2378,8 +2378,11 @@ class FSService:
         )
         changes_by_uri = {change["uri"]: change for change in changes}
         uris = sorted(changes_by_uri)
-        access = await viking_fs._can_access_many(uris, ctx, action=AclAction.READ)
-        if any(not access.get(uri, False) for uri in uris):
+        access_uris = [
+            uri for uri in uris if not viking_fs._has_global_memory_snapshot_access(uri, ctx)
+        ]
+        access = await viking_fs._can_access_many(access_uris, ctx, action=AclAction.READ)
+        if any(not access.get(uri, False) for uri in access_uris):
             raise PermissionDeniedError("Snapshot changes include inaccessible paths")
         page = [changes_by_uri[uri] for uri in uris[offset : offset + limit]]
         next_offset = offset + len(page)

@@ -11,7 +11,9 @@ import asyncio
 import shutil
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Tuple
+from unittest.mock import Mock
 
 import pytest
 
@@ -21,10 +23,11 @@ from openviking.pyagfs.exceptions import (
     AGFSNotSupportedError,
 )
 from openviking.server.identity import RequestContext, Role
+from openviking.service.fs_service import FSService
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_work_index import get_task_context
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import NotFoundError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from tests.test_task_tracker import _FakeAgfs
 
@@ -270,6 +273,40 @@ class TestCommitShowLog:
         ctx = _make_ctx(account="acct_missing")
         with pytest.raises(AGFSNotFoundError):
             await vfs.show("main", ctx=ctx)
+
+
+@pytest.mark.asyncio
+async def test_global_memory_snapshot_and_diff_paths(vfs):
+    ctx = RequestContext(user=UserIdentifier("acct_t", "global_agent"), role=Role.GLOBAL)
+    directory = "viking://user/user1/memories"
+    path = f"{directory}/note.md"
+    await vfs.write_file(path, b"memory", ctx=_make_ctx())
+    policy_lookup = Mock(return_value=None)
+    vfs.set_global_policy_service(SimpleNamespace(for_owner=policy_lookup))
+    snapshot = await vfs.commit(message="memory snapshot", paths=[directory], ctx=ctx)
+    page = await FSService(viking_fs=vfs).diff_paths(
+        [directory], from_ref=None, to_ref=snapshot["commit_oid"], ctx=ctx
+    )
+    assert page["changes"] == [{"uri": path, "change_type": "added"}]
+    policy_lookup.assert_not_called()
+    with pytest.raises(PermissionDeniedError):
+        await vfs.show(snapshot["commit_oid"], path=path, ctx=ctx)
+    with pytest.raises(PermissionDeniedError):
+        await vfs.show_blob_raw(snapshot["commit_oid"], path=path, ctx=ctx)
+    with pytest.raises(PermissionDeniedError):
+        await vfs.diff(path=path, from_ref=None, to_ref=snapshot["commit_oid"], ctx=ctx)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", [Role.GLOBAL, Role.USER, Role.ADMIN])
+@pytest.mark.parametrize("scope", ["privacy", "memories2", "memories/../privacy"])
+async def test_memory_snapshot_grant_rejects_unauthorized_paths(vfs, role, scope):
+    ctx = RequestContext(user=UserIdentifier("acct_t", "caller"), role=role)
+    paths = ["viking://user/user1/memories", f"viking://user/user1/{scope}"]
+    with pytest.raises(PermissionDeniedError):
+        await vfs.commit(message="mixed snapshot", paths=paths, ctx=ctx)
+    with pytest.raises(PermissionDeniedError):
+        await FSService(viking_fs=vfs).diff_paths(paths, from_ref=None, to_ref="main", ctx=ctx)
 
 
 # =========================================================================

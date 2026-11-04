@@ -40,6 +40,16 @@ _DERIVED_FILE_NAMES = frozenset({".abstract.md", ".overview.md", ".relations.jso
 class _SnapshotMixin:
     """Snapshot/git-like version control (commit/restore/show/diff/log)."""
 
+    def _has_global_memory_snapshot_access(self, uri: str, ctx: RequestContext) -> bool:
+        """Grant GLOBAL policy-independent memory snapshots and change listings only."""
+        parts = self._safe_uri_parts(uri)
+        return (
+            ctx.role == Role.GLOBAL
+            and len(parts) >= 3
+            and parts[0] == "user"
+            and parts[2] == "memories"
+        )
+
     def _ensure_snapshot_admin(self, ctx: RequestContext) -> None:
         if ctx.role not in {Role.ROOT, Role.ADMIN}:
             raise PermissionDeniedError(
@@ -299,7 +309,10 @@ class _SnapshotMixin:
                     uri=paths[0],
                 ) from exc
         try:
-            scope_uris = await self._snapshot_scope_uris(paths, real_ctx)
+            access_paths = [
+                uri for uri in paths if not self._has_global_memory_snapshot_access(uri, real_ctx)
+            ]
+            scope_uris = await self._snapshot_scope_uris(access_paths, real_ctx)
             await self._ensure_access_many(scope_uris, real_ctx, action=AclAction.READ)
             return await self._async_agfs.run("git_commit", **kwargs)
         finally:
@@ -800,12 +813,14 @@ class _SnapshotMixin:
     ) -> List[Dict[str, str]]:
         """List files changed under ``dirs`` between two commits.
 
-        ``base=None`` treats every file as added. Requires read access only;
-        derived summaries (.abstract.md / .overview.md / .relations.json) are
-        omitted so regenerated summaries do not count as source changes.
+        ``base=None`` treats every file as added. GLOBAL's memories grant applies;
+        other paths require read access. Derived summaries are omitted.
         """
         real_ctx = self._ctx_or_default(ctx)
-        await self._ensure_access_many(dirs, real_ctx, action=AclAction.READ)
+        access_dirs = [
+            uri for uri in dirs if not self._has_global_memory_snapshot_access(uri, real_ctx)
+        ]
+        await self._ensure_access_many(access_dirs, real_ctx, action=AclAction.READ)
         changes = await self._async_agfs.run(
             "git_diff_paths",
             account=real_ctx.account_id,
