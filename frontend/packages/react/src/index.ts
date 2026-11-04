@@ -1,8 +1,3 @@
-export { StatusBadge } from './components/status-badge/status-badge.js';
-export type {
-  StatusBadgeProps,
-  StatusBadgeStatus,
-} from './components/status-badge/status-badge.js';
 export { FileTree } from './components/file-tree/file-tree.js';
 export type {
   FileTreeEntryRow,
@@ -10,6 +5,29 @@ export type {
   FileTreeHandle,
   FileTreeLabels,
   FileTreeLoadMoreRow,
+  FileTreeOperations,
   FileTreeProps,
   FileTreeRow,
 } from './components/file-tree/file-tree.js';
+export { FileBrowser } from './modules/file-browser/file-browser.js';
+export type {
+  FileBrowserLabels,
+  FileBrowserProps,
+} from './modules/file-browser/file-browser.js';
+export { Console } from './modules/console/console.js';
+export type { ConsoleLabels, ConsoleProps } from './modules/console/console.js';
+export { AgentConnect } from './modules/agent-connect/agent-connect.js';
+export type {
+  AgentConnectLabels,
+  AgentConnectProps,
+} from './modules/agent-connect/agent-connect.js';
+export { TaskCenter } from './modules/task-center/task-center.js';
+export type {
+  TaskCenterLabels,
+  TaskCenterProps,
+} from './modules/task-center/task-center.js';
+export { UserUsage } from './modules/user-usage/user-usage.js';
+export type {
+  UserUsageLabels,
+  UserUsageProps,
+} from './modules/user-usage/user-usage.js';

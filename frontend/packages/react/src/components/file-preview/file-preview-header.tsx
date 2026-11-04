@@ -2,6 +2,7 @@ import type { MouseEvent } from 'react';
 
 import { CopyIcon } from './file-preview-icons.js';
 import { readCopyableText } from './file-preview-labels.js';
+import { performPreviewOperation } from './file-preview-operations.js';
 import styles from './file-preview.module.css';
 import type {
   FilePreviewFileTab,
@@ -15,10 +16,21 @@ export interface FilePreviewHeaderProps {
   text: Required<FilePreviewLabels>;
   viewMode: 'preview' | 'source';
   editing: boolean;
+  loadingEdit: boolean;
+  saving: boolean;
   onViewModeChange: (mode: 'preview' | 'source') => void;
   onEditStart: () => void;
   onEditCancel: () => void;
   onEditSave: () => void;
+}
+
+async function copyText(value: string, onCopied?: (text: string) => void) {
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch {
+    return;
+  }
+  onCopied?.(value);
 }
 
 /** 内容区标题行：路径面包屑、复制、视图切换、编辑与页签级插槽。 */
@@ -28,6 +40,8 @@ export function FilePreviewHeader({
   text,
   viewMode,
   editing,
+  loadingEdit,
+  saving,
   onViewModeChange,
   onEditStart,
   onEditCancel,
@@ -46,9 +60,14 @@ export function FilePreviewHeader({
             className={styles.breadcrumb}
             onClick={(event: MouseEvent<HTMLButtonElement>) => {
               event.stopPropagation();
-              fileTab.onOpenParent?.(path);
+              void performPreviewOperation(
+                fileTab.operations?.openParent
+                  ? () => fileTab.operations!.openParent!(path)
+                  : undefined,
+                () => fileTab.onOpenParent?.(path),
+              );
             }}
-            disabled={!fileTab.onOpenParent}
+            disabled={!fileTab.operations?.openParent || saving}
             title={path}
           >
             {path}
@@ -57,13 +76,13 @@ export function FilePreviewHeader({
           <span className={styles.breadcrumb}>{activeTab.key}</span>
         )}
 
-        {fileTab?.onCopyPath && path ? (
+        {path ? (
           <button
             type="button"
             className={styles.action}
             aria-label={text.copyPath}
             title={text.copyPath}
-            onClick={() => fileTab.onCopyPath?.(path)}
+            onClick={() => void copyText(path, fileTab.onCopyPath)}
           >
             <CopyIcon />
           </button>
@@ -96,7 +115,7 @@ export function FilePreviewHeader({
           </span>
         ) : null}
 
-        {fileTab?.onCopyContent ? (
+        {fileTab ? (
           <button
             type="button"
             className={styles.action}
@@ -109,7 +128,7 @@ export function FilePreviewHeader({
             disabled={!readCopyableText(fileTab)}
             onClick={() => {
               const value = readCopyableText(fileTab);
-              if (value) fileTab.onCopyContent?.(value);
+              if (value) void copyText(value, fileTab.onCopyContent);
             }}
           >
             <CopyIcon />
@@ -117,7 +136,17 @@ export function FilePreviewHeader({
         ) : null}
 
         {fileTab?.editing && !editing ? (
-          <button type="button" className={styles.button} onClick={onEditStart}>
+          <button
+            type="button"
+            className={styles.button}
+            disabled={
+              loadingEdit ||
+              (!fileTab.editing.loadContent &&
+                fileTab.source.content === undefined &&
+                !fileTab.source.file)
+            }
+            onClick={onEditStart}
+          >
             {text.edit}
           </button>
         ) : null}
@@ -128,6 +157,7 @@ export function FilePreviewHeader({
               type="button"
               className={styles.button}
               onClick={onEditCancel}
+              disabled={saving}
             >
               {text.cancel}
             </button>
@@ -135,17 +165,23 @@ export function FilePreviewHeader({
               type="button"
               className={styles.buttonPrimary}
               onClick={onEditSave}
+              disabled={saving}
             >
               {text.save}
             </button>
           </>
         ) : null}
 
-        {fileTab?.onDownload ? (
+        {fileTab?.operations?.download ? (
           <button
             type="button"
             className={styles.button}
-            onClick={() => fileTab.onDownload?.()}
+            onClick={() => {
+              void performPreviewOperation(
+                fileTab.operations?.download,
+                fileTab.onDownload,
+              );
+            }}
           >
             {text.download}
           </button>

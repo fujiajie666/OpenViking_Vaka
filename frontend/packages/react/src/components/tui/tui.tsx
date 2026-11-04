@@ -1,18 +1,15 @@
 import styles from './tui.module.css';
 
 export type {
-  TuiCommandSuggestion,
-  TuiCustomContent,
-  TuiErrorContent,
-  TuiHistoryEntry,
-  TuiJsonContent,
+  TuiCommandHelpContent,
+  TuiCommandHelpItem,
+  TuiCommandHelpSection,
   TuiLabels,
-  TuiMarkdownContent,
   TuiProps,
-  TuiQuickAction,
   TuiRecord,
   TuiRecordContent,
   TuiRecordStatus,
+  TuiResourcePreviewContent,
   TuiResourceTreeContent,
   TuiResourceTreeDetailRow,
   TuiResourceTreeItem,
