@@ -166,6 +166,123 @@ async def test_compile_api_rejects_system_source_without_creating_task(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role,foreign_source,runtime_status",
+    [
+        (Role.GLOBAL, True, "completed"),
+        (Role.GLOBAL, True, "failed"),
+        (Role.USER, True, "completed"),
+        (Role.ADMIN, True, "completed"),
+        (Role.USER, False, "completed"),
+        (Role.ADMIN, False, "completed"),
+        (Role.ROOT, True, "completed"),
+    ],
+)
+async def test_compile_other_user_experiences_preserves_actor_role(
+    service, app, client, monkeypatch, role, foreign_source, runtime_status
+):
+    """Snapshots and rollback retain the actor role without granting cross-owner USER access."""
+    from openviking.server.auth import get_request_context
+    from openviking.service.compile_service import CompileSessionAccepted, CompileSessionStatus
+    from openviking.service.task_tracker import get_task_tracker
+
+    ctx = RequestContext(user=service.user, role=role, api_key="test-compile-key")
+    app.dependency_overrides[get_request_context] = lambda: ctx
+    root = RequestContext(user=service.user, role=Role.ROOT)
+    source_owner = "experience-owner" if foreign_source else ctx.user.user_id
+    source = f"viking://user/{source_owner}/memories/experiences"
+    target = "viking://resources/team-experiences"
+    skill = "viking://agent/skills/team-compile"
+    policy = """---
+type: global-access-policy
+schema_version: 1
+default: deny
+rules:
+  - effect: allow
+    path: memories/experiences
+    recursive: true
+---
+"""
+    for uri, content in {
+        f"viking://user/{source_owner}/GLOBAL_POLICY.md": policy,
+        f"{source}/retry.md": "Retry only after checking the existing task.",
+        f"{target}/existing.md": "Existing team experience.",
+        f"{skill}/SKILL.md": "Extract reusable team experience.",
+    }.items():
+        await service.viking_fs.write_file(uri, content, ctx=root)
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: SimpleNamespace(enqueue=AsyncMock()),
+    )
+    monkeypatch.setattr(service.fs, "finalize_compile_directories", AsyncMock())
+    service.compile.configure_local_backend("http://localhost:1", "")
+
+    async def generate(*args, **kwargs):
+        await service.fs.batch_write(
+            root_uri=target,
+            operations=[{"uri": f"{target}/generated.md", "content": "Generated team experience."}],
+            ctx=ctx,
+            defer_processing=True,
+            edit_source="compile",
+        )
+        return CompileSessionAccepted(session_id="runtime-task")
+
+    runtime = SimpleNamespace(
+        create=AsyncMock(side_effect=generate),
+        get=AsyncMock(
+            return_value=CompileSessionStatus(
+                status=runtime_status,
+                stage=runtime_status,
+                error="Generation failed" if runtime_status == "failed" else None,
+            )
+        ),
+    )
+    monkeypatch.setattr(service.compile, "_client", lambda: runtime)
+    commits = AsyncMock(wraps=service.viking_fs.commit)
+    removals = AsyncMock(wraps=service.viking_fs.rm)
+    monkeypatch.setattr(service.viking_fs, "commit", commits)
+    monkeypatch.setattr(service.viking_fs, "rm", removals)
+    payload = {"from": [source], "to": target, "skill": skill}
+    response = await client.post("/api/v1/compile", json=payload)
+    if foreign_source and role not in {Role.GLOBAL, Role.ROOT}:
+        assert response.status_code == 403, response.text
+        runtime.create.assert_not_awaited()
+        return
+
+    assert response.status_code == 202, response.text
+    task_id = response.json()["result"]["task_id"]
+    owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
+    await service.compile._tasks.execute(task_id, **owner)
+    task = await get_task_tracker().get(task_id, **owner)
+    assert task.status == runtime_status, task.error
+    runtime.create.assert_awaited_once()
+    assert commits.await_args_list
+    assert all(call.kwargs["ctx"].role == role for call in commits.await_args_list)
+    if runtime_status == "failed":
+        assert not await service.viking_fs.exists(f"{target}/generated.md", ctx=ctx)
+        assert removals.await_args_list
+        assert all(call.kwargs["ctx"].role == role for call in removals.await_args_list)
+        return
+    assert await service.compile.lifecycle.versions._commit([source], "experience version", ctx)
+
+    await service.viking_fs.write_file(
+        f"{source}/retry.md", "Check the task before retrying.", ctx=root
+    )
+    response = await client.post("/api/v1/compile", json=payload)
+    assert response.status_code == 202, response.text
+    task_id = response.json()["result"]["task_id"]
+    await service.compile._tasks.execute(task_id, **owner)
+    task = await get_task_tracker().get(task_id, **owner)
+    assert task.status == "completed", task.error
+    assert runtime.create.await_count == 2
+    changes = runtime.create.await_args.args[0]["payload"]["args"]["changes"]
+    assert changes["execution"]["mode"] == "incremental"
+    assert changes["diff_dirs"] == [source]
+    assert all(call.kwargs["ctx"].role == role for call in commits.await_args_list)
+
+
+@pytest.mark.asyncio
 async def test_page_reads_past_200_and_isolates_owner():
     agfs = _FakeAgfs()
     store = PersistentTaskStore(agfs)
@@ -446,6 +563,7 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     assert "private-runtime-key" not in json.dumps(stored_auth)
     auth = await service.compile._tasks._task_auth(first, **owner)
     assert auth["openviking_connection"]["request_id"] == "original-request-id"
+    assert auth["openviking_connection"]["role"] == Role.USER
     await service.compile._tasks.execute(first, **owner)
     assert (await tracker.get(first, **owner)).status == "completed", (
         await tracker.get(first, **owner)

@@ -183,7 +183,7 @@ class _AccessMixin:
                 owners.add(parts[1])
             elif parts == ["user"]:
                 raise PermissionDeniedError("GLOBAL_ACCESS_DENIED: explicit owner required")
-        if ctx.bypass_acl or len(owners) > 1:
+        if len(owners) > 1 or (ctx.bypass_acl and owners - {ctx.user.user_id}):
             raise PermissionDeniedError(
                 "GLOBAL_ACCESS_DENIED: one owner and no ACL bypass required"
             )

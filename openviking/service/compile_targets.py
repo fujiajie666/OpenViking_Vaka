@@ -751,10 +751,11 @@ _RESULT_KEYS = {"added": "created", "modified": "updated", "deleted": "deleted"}
 _NULL_OID = "0" * 40
 
 
-def task_ctx(account_id: str, user_id: str) -> RequestContext:
+def task_ctx(account_id: str, user_id: str, role: str = Role.USER) -> RequestContext:
+    """Build an ACL-bypassing maintenance context from a trusted role; omission uses USER."""
     return RequestContext(
         user=UserIdentifier(account_id=account_id, user_id=user_id),
-        role=Role.USER,
+        role=Role.parse(role),
         bypass_acl=True,
     )
 
@@ -1210,7 +1211,11 @@ class CompileLifecycle:
         A missing output snapshot fails before Runtime execution; busy scopes raise ResourceBusyError.
         """
         meta, request = task.meta["request"]["compile"], task.meta["request"]
-        ctx = task_ctx(task.account_id, task.user_id)
+        ctx = task_ctx(
+            task.account_id,
+            task.user_id,
+            task.auth.get("openviking_connection", {}).get("role", Role.USER),
+        )
         incremental = meta["mode"] == "incremental"
         system_skill = classify_uri(request["skill"]).is_system
         run = run or new_compile_operation(task, record)
@@ -1365,7 +1370,11 @@ class CompileLifecycle:
             run = await self._store.get_operation(account_id, target_to, operation_id)
             if run is not None and run["finished_at"] is None:
                 run_meta = run["meta"]
-                ctx = task_ctx(task.account_id, task.user_id)
+                ctx = task_ctx(
+                    task.account_id,
+                    task.user_id,
+                    task.auth.get("openviking_connection", {}).get("role", Role.USER),
+                )
                 record = await self._store.get(account_id, request["to"])
                 current = self._task_is_current(record, task)
                 if not current:
@@ -1553,7 +1562,7 @@ class CompileLifecycle:
     async def _rollback(self, to: str, run: Dict[str, Any], ctx: RequestContext) -> None:
         """Restore ``to`` to ``run``'s baseline; ``ctx`` provides snapshot access.
 
-        Writes enforce the owner's USER ACL. Denied paths are recorded; storage
+        Writes enforce the actor's current ACL. Denied paths are recorded; storage
         errors propagate. A persisted head makes completion idempotent.
         """
         run_meta = run["meta"]
@@ -1565,7 +1574,7 @@ class CompileLifecycle:
                     return
                 actor_ctx = RequestContext(
                     user=ctx.user,
-                    role=Role.USER,
+                    role=ctx.role,
                     bypass_acl=False,
                     group_ids=(
                         tuple(await self.resolve_groups(ctx.account_id, ctx.user.user_id))
@@ -2785,5 +2794,9 @@ class CompileVersions:
         lease_ref: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
         return await commit_snapshot(
-            self._fs, uris, message, task_ctx(ctx.account_id, ctx.user.user_id), lease_ref=lease_ref
+            self._fs,
+            uris,
+            message,
+            task_ctx(ctx.account_id, ctx.user.user_id, ctx.role),
+            lease_ref=lease_ref,
         )

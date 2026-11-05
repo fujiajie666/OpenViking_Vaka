@@ -276,6 +276,28 @@ class TestCommitShowLog:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "uri,allowed",
+    [
+        ("viking://resources/team-experiences/note.md", True),
+        ("viking://user/global_agent/memories/experiences/note.md", True),
+        ("viking://user/user1/memories/experiences/note.md", False),
+    ],
+)
+async def test_global_maintenance_bypass_keeps_owner_boundary(vfs, uri, allowed):
+    """Maintenance bypass permits shared and own reads, never another owner's content."""
+    await vfs.write_file(uri, "experience", ctx=_make_ctx())
+    ctx = RequestContext(
+        user=UserIdentifier("acct_t", "global_agent"), role=Role.GLOBAL, bypass_acl=True
+    )
+    if allowed:
+        assert await vfs.read_file(uri, ctx=ctx) == "experience"
+    else:
+        with pytest.raises(PermissionDeniedError, match="GLOBAL_ACCESS_DENIED"):
+            await vfs.read_file(uri, ctx=ctx)
+
+
+@pytest.mark.asyncio
 async def test_global_memory_snapshot_and_diff_paths(vfs):
     ctx = RequestContext(user=UserIdentifier("acct_t", "global_agent"), role=Role.GLOBAL)
     directory = "viking://user/user1/memories"

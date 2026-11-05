@@ -524,7 +524,7 @@ class CompileService:
             resource_id=", ".join(normalized.from_),
             payload=payload,
             private_payload=private_payload,
-            connection=connection,
+            connection={**connection, "role": str(ctx.role)},
             ctx=ctx,
             idempotency_key=idempotency_key,
             submission_payload=submitted if idempotency_key else None,
