@@ -550,7 +550,7 @@ enum CompileCommand {
         #[arg(
             long,
             alias = "events_time_decay_protection",
-            value_parser = crate::parse_event_time_decay_protection,
+            value_parser = crate::cli::parse_event_time_decay_protection,
             help_heading = "Advanced options"
         )]
         events_time_decay_protection: Option<String>,
@@ -647,7 +647,7 @@ enum CompileCommand {
         #[arg(
             long,
             alias = "events_time_decay_protection",
-            value_parser = crate::parse_event_time_decay_protection,
+            value_parser = crate::cli::parse_event_time_decay_protection,
             help_heading = "Advanced options"
         )]
         events_time_decay_protection: Option<String>,
@@ -738,7 +738,7 @@ pub(super) async fn run() {
                     path,
                     from_ref,
                     to_ref,
-                } => crate::SnapshotCmd::Diff {
+                } => crate::cli::SnapshotCmd::Diff {
                     path,
                     from_ref,
                     to_ref,
@@ -749,7 +749,7 @@ pub(super) async fn run() {
                     to_ref,
                     offset,
                     limit,
-                } => crate::SnapshotCmd::DiffPaths {
+                } => crate::cli::SnapshotCmd::DiffPaths {
                     paths,
                     from_ref,
                     to_ref,
@@ -1165,7 +1165,7 @@ mod tests {
 
     /// Compares selected subcommands on a larger stack because the full Clap tree is deeply nested.
     fn assert_selected_commands_match_the_full_cli() {
-        let full_cli = crate::Cli::command();
+        let full_cli = crate::cli::Cli::command();
         let compile_cli = CompileCli::command();
 
         for name in [

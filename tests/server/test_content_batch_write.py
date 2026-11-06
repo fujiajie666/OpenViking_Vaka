@@ -21,12 +21,15 @@ from openviking.storage.context_update_plan import (
 )
 from openviking.storage.queuefs.queue_middleware import EnqueueReceipt
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
+from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry.context import bind_telemetry
 from openviking.telemetry.operation import OperationTelemetry
 from openviking.utils.content_hash import content_md5
 from openviking_cli.exceptions import (
+    ConflictError,
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
 from tests.test_task_tracker import _FakeAgfs
@@ -41,6 +44,11 @@ class _PathLockClient:
 
     async def pathlock_acquire_exact_batch(self, paths):
         self.paths = list(paths)
+        self.held = True
+        return {"lease_ref": "lock-1"}
+
+    async def pathlock_acquire_exact(self, path):
+        self.paths = [path]
         self.held = True
         return {"lease_ref": "lock-1"}
 
@@ -123,6 +131,163 @@ class _VFS:
         self.writes.append(uri)
 
 
+@pytest.mark.asyncio
+async def test_system_write_is_file_only_without_queue_work(
+    _coordinator_queue_for_unit_tests,
+):
+    root = "viking://system/memory/memory_templates/custom/demo"
+    uri = f"{root}/template.md"
+    vfs = _VFS(root)
+    coordinator = ContentWriteCoordinator(vfs)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ADMIN)
+
+    result = await coordinator.write(
+        uri=uri,
+        content="template",
+        ctx=ctx,
+        wait=False,
+    )
+
+    assert vfs.files[uri] == "template"
+    assert vfs._async_agfs.releases == 1
+    assert vfs._async_agfs.handoffs == 0
+    assert result["root_uri"] == root
+    assert result["semantic_status"] == "skipped"
+    assert result["vector_status"] == "skipped"
+    assert result["queue_status"] is None
+    assert _last_content_write_refresh(_coordinator_queue_for_unit_tests) == {"kind": "none"}
+    _coordinator_queue_for_unit_tests.content_write.enqueue.assert_awaited_once()
+    _coordinator_queue_for_unit_tests.semantic.enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_system_batch_write_is_file_only_without_queue_work(
+    _coordinator_queue_for_unit_tests,
+):
+    root = "viking://system/memory/memory_templates/custom/demo"
+    first = f"{root}/first.md"
+    second = f"{root}/second.md"
+    vfs = _VFS(root, {first: "old"})
+    coordinator = ContentWriteCoordinator(vfs)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ADMIN)
+
+    result = await coordinator.batch_write(
+        root_uri=root,
+        operations=[
+            {"uri": first, "content": "new"},
+            {"uri": second, "content": "created"},
+        ],
+        ctx=ctx,
+        wait=False,
+    )
+
+    assert result["updated"] == [first]
+    assert result["created"] == [second]
+    assert result["semantic_status"] == "skipped"
+    assert result["vector_status"] == "skipped"
+    assert result["queue_status"] is None
+    assert vfs._async_agfs.releases == 1
+    assert vfs._async_agfs.handoffs == 0
+    assert _last_content_write_refresh(_coordinator_queue_for_unit_tests) == {"kind": "none"}
+    _coordinator_queue_for_unit_tests.content_write.enqueue.assert_awaited_once()
+    _coordinator_queue_for_unit_tests.semantic.enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "root",
+    [
+        "viking://system/compile/example-skills",
+        "viking://system/memory/memory_templates/builtin",
+    ],
+)
+async def test_system_builtin_batch_write_rejects_external_root_writes(
+    _coordinator_queue_for_unit_tests,
+    root,
+):
+    uri = f"{root}/demo/assets/icon.bin"
+    content = b"\x89PNG\r\n\x1a\nasset"
+    vfs = _VFS(root)
+    vfs._ensure_access = VikingFS(agfs=SimpleNamespace())._ensure_access
+    coordinator = ContentWriteCoordinator(vfs)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    with pytest.raises(PermissionDeniedError):
+        await coordinator.batch_write(
+            root_uri=root,
+            operations=[
+                {
+                    "uri": uri,
+                    "content_base64": base64.b64encode(content).decode("ascii"),
+                    "mode": "replace",
+                }
+            ],
+            ctx=ctx,
+            wait=False,
+        )
+
+    assert vfs.files == {}
+    assert vfs._async_agfs.paths == []
+    _coordinator_queue_for_unit_tests.content_write.enqueue.assert_not_awaited()
+    _coordinator_queue_for_unit_tests.semantic.enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_user_skill_namespace_batch_write_remains_rejected():
+    root = "viking://user/default/skills"
+    coordinator = ContentWriteCoordinator(_VFS(root))
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+
+    with pytest.raises(
+        InvalidArgumentError,
+        match="batch-write root must be a resource or memory directory",
+    ):
+        await coordinator.batch_write(
+            root_uri=root,
+            operations=[
+                {
+                    "uri": f"{root}/demo/SKILL.md",
+                    "content": "skill",
+                    "mode": "replace",
+                }
+            ],
+            ctx=ctx,
+        )
+
+
+@pytest.mark.asyncio
+async def test_system_write_rejects_indexed_metadata():
+    root = "viking://system/memory/memory_templates/custom/demo"
+    uri = f"{root}/template.md"
+    coordinator = ContentWriteCoordinator(_VFS(root))
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ADMIN)
+
+    with pytest.raises(InvalidArgumentError, match="tags are not supported"):
+        await coordinator.write(
+            uri=uri,
+            content="template",
+            tags=["kind=template"],
+            ctx=ctx,
+        )
+
+
+@pytest.mark.asyncio
+async def test_system_set_tags_rejects_capability_before_write_access():
+    uri = "viking://system/memory/memory_templates/custom/demo/template.md"
+    ensure_access = AsyncMock(side_effect=AssertionError("write access must not be checked"))
+    coordinator = ContentWriteCoordinator(SimpleNamespace(_ensure_access=ensure_access))
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+
+    with pytest.raises(InvalidArgumentError, match="tags are not supported"):
+        await coordinator.set_tags(
+            uri=uri,
+            tags=["kind=template"],
+            ctx=ctx,
+        )
+
+    ensure_access.assert_not_awaited()
+
+
 @pytest.fixture(autouse=True)
 def _coordinator_queue_for_unit_tests(monkeypatch, request):
     if "service" in request.fixturenames:
@@ -165,7 +330,8 @@ async def test_batch_coalesces_compile_target_updates(service, monkeypatch):
     root = "viking://resources/batch-metadata"
     store = service.compile.lifecycle.store
     await service.viking_fs.write_file(f"{root}/seed.md", "seed", ctx=ctx)
-    await store.register(ctx.account_id, root)
+    async with store.edit(ctx.account_id, root, create=True):
+        pass
     update_time = AsyncMock(wraps=store.mark_content_updated)
     monkeypatch.setattr(store, "mark_content_updated", update_time)
     ops = [{"uri": f"{root}/{i}.md", "content": "changed"} for i in range(100)]
@@ -267,7 +433,7 @@ async def test_batch_create_replace_and_upsert_overwrite_or_create(monkeypatch):
         root_uri=root,
         operations=[
             {"uri": existing, "content": "replacement", "mode": "create"},
-            {"uri": created_by_replace, "content": "created", "mode": "replace"},
+            {"uri": created_by_replace, "content": "created", "mode": "replace", "if_absent": True},
             {"uri": created_by_upsert, "content": "upsert", "mode": "upsert"},
         ],
         ctx=ctx,
@@ -281,6 +447,82 @@ async def test_batch_create_replace_and_upsert_overwrite_or_create(monkeypatch):
         created_by_replace: "created",
         created_by_upsert: "upsert",
     }
+
+    with pytest.raises(ConflictError, match="Target already exists"):
+        await coordinator.batch_write(
+            root_uri=root,
+            operations=[
+                {"uri": existing, "content": "must not be written"},
+                {"uri": created_by_replace, "content": "overwrite", "if_absent": True},
+            ],
+            ctx=ctx,
+            wait=False,
+        )
+    assert vfs.files[existing] == "replacement"
+    assert vfs.files[created_by_replace] == "created"
+
+
+@pytest.mark.asyncio
+async def test_batch_revision_guard_preserves_conflicts_and_unchanged_results(
+    _coordinator_queue_for_unit_tests,
+):
+    root = "viking://resources/wiki"
+    same = f"{root}/same.md"
+    stale = f"{root}/stale.md"
+    changed = f"{root}/changed.md"
+    vfs = _VFS(root, {same: "same", stale: "newer", changed: "old"})
+    coordinator = ContentWriteCoordinator(vfs)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    result = await coordinator.batch_write(
+        root_uri=root,
+        operations=[
+            {
+                "uri": same,
+                "content": "same",
+                "expected_sha256": hashlib.sha256(b"same").hexdigest(),
+            },
+            {
+                "uri": stale,
+                "content": "replacement",
+                "expected_sha256": hashlib.sha256(b"old").hexdigest(),
+            },
+            {
+                "uri": changed,
+                "content": "replacement",
+                "expected_sha256": hashlib.sha256(b"old").hexdigest(),
+            },
+        ],
+        ctx=ctx,
+        wait=False,
+        skip_conflicts=True,
+        defer_processing=True,
+    )
+
+    assert result["unchanged"] == [same]
+    assert result["updated"] == [changed]
+    assert [conflict["uri"] for conflict in result["conflicts"]] == [stale]
+    assert vfs.writes == [changed]
+    assert vfs.files[stale] == "newer"
+    assert _last_content_write_payload(_coordinator_queue_for_unit_tests)["result"][
+        "unchanged"
+    ] == [same]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expected", ["ABC", "A" * 64, 123])
+async def test_batch_rejects_invalid_revision_before_writing(expected):
+    root = "viking://resources/wiki"
+    vfs = _VFS(root)
+    coordinator = ContentWriteCoordinator(vfs)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    with pytest.raises(InvalidArgumentError, match="expected_sha256"):
+        await coordinator.batch_write(
+            root_uri=root,
+            operations=[{"uri": f"{root}/page.md", "content": "new", "expected_sha256": expected}],
+            ctx=ctx,
+            wait=False,
+        )
+    assert vfs.writes == []
 
 
 @pytest.mark.asyncio
@@ -744,7 +986,7 @@ async def test_batch_applies_operation_acl_and_forwards_file_options(
 
 
 @pytest.mark.asyncio
-async def test_batch_same_content_with_tags_is_not_skipped_as_a_conflict_noop(
+async def test_batch_same_content_applies_tags(
     monkeypatch,
     _coordinator_queue_for_unit_tests,
 ):
@@ -760,7 +1002,6 @@ async def test_batch_same_content_with_tags_is_not_skipped_as_a_conflict_noop(
             {
                 "uri": uri,
                 "content": "same",
-                "expected_sha256": hashlib.sha256(b"same").hexdigest(),
                 "tags": ["team=search"],
             }
         ],
