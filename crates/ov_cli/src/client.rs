@@ -413,16 +413,11 @@ impl HttpClient {
         tags: Vec<String>,
         tag_mode: &str,
         acl: Option<Value>,
-        edit_source: &str,
     ) -> Result<serde_json::Value> {
         let mut body = Self::build_write_body(uri, content, mode, wait, processing_mode);
         add_resource_tag_fields(&mut body, &tags, tag_mode);
         if let Some(acl) = acl {
             body["acl"] = acl;
-        }
-        // Omit the default so the request stays valid for servers without edit_source.
-        if edit_source != "manual" {
-            body["edit_source"] = Value::from(edit_source);
         }
         self.post("/api/v1/content/write", &body).await
     }
@@ -2701,6 +2696,44 @@ mod tests {
         );
 
         assert_eq!(body["processing_mode"], "vectors_only");
+    }
+
+    #[tokio::test]
+    async fn write_sends_supported_fields_without_edit_source() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        let acl = json!({"acl_mode": "restricted", "entries": []});
+
+        client
+            .write(
+                "viking://resources/demo.md",
+                "updated",
+                "create",
+                true,
+                "vectors_only",
+                vec!["env=test".to_string()],
+                "append",
+                Some(acl.clone()),
+            )
+            .await
+            .unwrap();
+
+        let request = request_rx.await.unwrap();
+        assert!(request.starts_with("POST /api/v1/content/write "));
+        let (_, body) = request.split_once("\r\n\r\n").unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(body).unwrap(),
+            json!({
+                "uri": "viking://resources/demo.md",
+                "content": "updated",
+                "mode": "create",
+                "wait": true,
+                "processing_mode": "vectors_only",
+                "tags": ["env=test"],
+                "tag_mode": "append",
+                "acl": acl,
+            })
+        );
     }
 
     #[tokio::test]

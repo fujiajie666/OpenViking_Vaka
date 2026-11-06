@@ -1,4 +1,6 @@
 //! Exercise the real command and an isolated selected config, never the user's config.
+#![cfg(not(feature = "compile-cli"))]
+
 use serde_json::{Value, json};
 use std::{
     fs,

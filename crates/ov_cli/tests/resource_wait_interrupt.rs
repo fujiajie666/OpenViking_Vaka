@@ -1,5 +1,5 @@
 //! Exercise the real process exit path without cancelling the server task.
-#![cfg(unix)]
+#![cfg(all(unix, not(feature = "compile-cli")))]
 
 use serde_json::json;
 use std::process::Stdio;

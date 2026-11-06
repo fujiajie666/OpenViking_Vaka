@@ -1,17 +1,17 @@
 # @openviking/compile
 
-OpenViking retrieval and content-write CLI for cloud agents. The package installs an `ov` command with seven retrieval commands, `snapshot diff`, `snapshot diff-paths`, and `write`; other mutation and administration commands are not included. Commands follow the same option contract and behavior as their counterparts in `@openviking/cli`, except that `write` always records its edit source as `compile`, exposes no source option, and accepts only `vectors_only` processing.
+OpenViking retrieval and content-write CLI for cloud agents. The package installs an `ov` command with seven retrieval commands, `snapshot diff`, `snapshot diff-paths`, and `write`; other mutation and administration commands are not included. Commands follow the same option contract and behavior as their counterparts in `@openviking/cli`.
 
 ## Install
 
 ```bash
-npm i -g @openviking/compile
+npm i -g @openviking/compile@0.1.9
 ```
 
 Do not install this package globally alongside `@openviking/cli`; both packages provide an executable named `ov`. Install one package globally, or run this restricted distribution in an isolated project with `npm exec`.
 
 ```bash
-npm exec --yes --package=@openviking/compile -- ov --help
+npm exec --yes --package=@openviking/compile@0.1.9 -- ov --help
 ```
 
 ## Authentication
@@ -94,11 +94,12 @@ ov snapshot diff-paths --paths viking://resources/docs,viking://resources/notes 
 ov write viking://resources/notes.md --content "updated text"
 ov write viking://resources/notes.md --from-file ./notes.md --append
 ov write viking://resources/new.md --content "new text" --mode create --wait
+ov write viking://resources/notes.md --content "updated text" --processing-mode vectors_only
 ```
 
-The write modes are `replace` (default), `append`, and `create`. Writes use `vectors_only` processing by default, updating vectors without semantic processing. The optional `--processing-mode` argument accepts only `vectors_only`. Writes support `--tags`, `--tag-mode replace|append|clear`, and ACL JSON via `--acl`. The `clear` tag mode does not require `--tags`.
+The write modes are `replace` (default), `append`, and `create`. Writes use `semantic_and_vectors` processing by default, updating semantic content and vectors. Set `--processing-mode vectors_only` to update vectors without semantic processing. Writes support `--tags`, `--tag-mode replace|append|clear`, and ACL JSON via `--acl`. The `clear` tag mode does not require `--tags`.
 
-Every write sends `edit_source: "compile"` to record Compile provenance in output versions. No source argument is needed. The server must support Compile edit sources.
+`write` sends no `edit_source` field and accepts no `--edit-source` option.
 
 `write --wait` waits within the HTTP request timeout. A separate `write --timeout` option is not supported by the current API.
 

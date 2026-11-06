@@ -457,14 +457,12 @@ fn cli_parses_clear_tag_mode_without_tags() {
         "content",
         "--tag-mode",
         "clear",
-        "--edit-source",
-        "compile",
     ])
-    .expect("write clear mode with Compile source should parse");
+    .expect("write clear mode should parse");
     assert!(matches!(
         write.command,
-        Commands::Write { tag_mode, tags, edit_source, .. }
-            if tag_mode == "clear" && tags.is_empty() && edit_source == "compile"
+        Commands::Write { tag_mode, tags, .. }
+            if tag_mode == "clear" && tags.is_empty()
     ));
 
     let reindex = Cli::try_parse_from([

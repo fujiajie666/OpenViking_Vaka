@@ -73,7 +73,7 @@ enum CompileCommand {
         #[arg(long, default_value_t = -1, allow_negative_numbers = true, value_parser = clap::value_parser!(i64).range(-1..), help_heading = "Common options")]
         limit: i64,
     },
-    /// Write text content with Compile provenance
+    /// Replace, append, or create text content
     Write {
         /// Viking URI
         #[arg(value_name = "uri")]
@@ -108,11 +108,11 @@ enum CompileCommand {
         /// Wait for async processing to finish
         #[arg(long, default_value = "false", help_heading = "Common options")]
         wait: bool,
-        /// Update vectors without semantic processing
+        /// Content post-write processing mode
         #[arg(
             long = "processing-mode",
-            default_value = "vectors_only",
-            value_parser = ["vectors_only"],
+            default_value = "semantic_and_vectors",
+            value_parser = ["semantic_and_vectors", "vectors_only"],
             help_heading = "Advanced options"
         )]
         processing_mode: String,
@@ -125,9 +125,6 @@ enum CompileCommand {
         /// ACL JSON, for example {"acl_mode":"restricted","entries":[]}
         #[arg(long, value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s))]
         acl: Option<serde_json::Value>,
-        /// Writes carry Compile provenance in output version history.
-        #[arg(skip = String::from("compile"))]
-        edit_source: String,
     },
     /// Run content pattern search
     Grep {
@@ -779,7 +776,6 @@ pub(super) async fn run() {
             tags,
             tag_mode,
             acl,
-            edit_source,
         } => {
             let effective_mode = if let Some(m) = mode {
                 m
@@ -798,7 +794,6 @@ pub(super) async fn run() {
                 tags,
                 tag_mode,
                 acl,
-                edit_source,
                 ctx,
             )
             .await
@@ -1070,7 +1065,7 @@ mod tests {
     use super::*;
     use clap::{Command, CommandFactory};
 
-    /// Captures shared parsing behavior; write provenance and processing are restricted.
+    /// Captures shared parsing behavior for commands exposed by both CLI distributions.
     #[derive(Debug, PartialEq)]
     struct ArgumentContract {
         id: String,
@@ -1180,19 +1175,9 @@ mod tests {
                 .find(|command| command.get_name() == name)
                 .expect("selected command must exist in the compile CLI");
 
-            let mut full_contract = argument_contract(full_command);
-            if name == "write" {
-                full_contract.retain(|argument| argument.id != "edit_source");
-                let processing_mode = full_contract
-                    .iter_mut()
-                    .find(|argument| argument.id == "processing_mode")
-                    .expect("write must expose its processing mode");
-                processing_mode.default_values = vec!["vectors_only".to_string()];
-                processing_mode.possible_values = vec!["vectors_only".to_string()];
-            }
             assert_eq!(
                 argument_contract(compile_command),
-                full_contract,
+                argument_contract(full_command),
                 "argument contract differs for {name}"
             );
             assert_eq!(
@@ -1223,7 +1208,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_write_options_with_fixed_compile_provenance() {
+    fn parses_write_options() {
         let cli = CompileCli::try_parse_from([
             "ov",
             "write",
@@ -1256,7 +1241,6 @@ mod tests {
                 tags,
                 tag_mode,
                 acl,
-                edit_source,
             } => {
                 assert_eq!(uri, "viking://resources/a.md");
                 assert_eq!(content.as_deref(), Some("hello"));
@@ -1267,7 +1251,6 @@ mod tests {
                 assert_eq!(processing_mode, "vectors_only");
                 assert_eq!(tags, ["env=prod", "team=search"]);
                 assert_eq!(tag_mode, "append");
-                assert_eq!(edit_source, "compile");
                 assert_eq!(
                     acl,
                     Some(serde_json::json!({"acl_mode": "restricted", "entries": []}))
@@ -1278,7 +1261,7 @@ mod tests {
     }
 
     #[test]
-    fn write_defaults_to_vectors_only_and_exposes_only_that_mode() {
+    fn write_defaults_to_semantic_and_vectors_and_accepts_vectors_only() {
         let args = [
             "ov",
             "write",
@@ -1289,15 +1272,22 @@ mod tests {
         let cli = CompileCli::try_parse_from(args).unwrap();
         assert!(matches!(
             cli.command,
-            CompileCommand::Write { processing_mode, edit_source, .. }
-                if processing_mode == "vectors_only" && edit_source == "compile"
+            CompileCommand::Write { processing_mode, .. }
+                if processing_mode == "semantic_and_vectors"
         ));
-        let error = CompileCli::try_parse_from(
-            args.into_iter()
-                .chain(["--processing-mode", "semantic_and_vectors"]),
-        )
-        .err()
-        .expect("unsupported processing modes must be rejected");
+        for mode in ["semantic_and_vectors", "vectors_only"] {
+            let cli =
+                CompileCli::try_parse_from(args.into_iter().chain(["--processing-mode", mode]))
+                    .expect("supported processing modes must parse");
+            assert!(matches!(
+                cli.command,
+                CompileCommand::Write { processing_mode, .. } if processing_mode == mode
+            ));
+        }
+        let error =
+            CompileCli::try_parse_from(args.into_iter().chain(["--processing-mode", "invalid"]))
+                .err()
+                .expect("unsupported processing modes must be rejected");
         assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
         let mut command = CompileCli::command();
         let write = command.find_subcommand_mut("write").unwrap();
@@ -1306,7 +1296,7 @@ mod tests {
             write.render_long_help().to_string(),
         ] {
             assert!(help.contains("vectors_only"));
-            assert!(!help.contains("semantic_and_vectors"));
+            assert!(help.contains("semantic_and_vectors"));
         }
     }
 

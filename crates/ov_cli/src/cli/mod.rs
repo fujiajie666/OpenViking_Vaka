@@ -31,7 +31,10 @@ use clap::{ArgAction, Parser, Subcommand};
 
 const MAX_TIME_DECAY_DURATION_DAYS: u128 = 3000 * 365;
 
-fn parse_event_time_decay_protection(value: &str) -> std::result::Result<String, String> {
+/// Validate 0 or an Xm/Xh/Xd duration up to 1095000d, returning the original value or an input error.
+pub(crate) fn parse_event_time_decay_protection(
+    value: &str,
+) -> std::result::Result<String, String> {
     if value == "0" {
         return Ok(value.to_string());
     }
@@ -644,14 +647,6 @@ pub(crate) enum Commands {
         /// ACL JSON, for example {"acl_mode":"restricted","entries":[]}
         #[arg(long, value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s))]
         acl: Option<serde_json::Value>,
-        /// Who made the edit, recorded in Compile output versions
-        #[arg(
-            long = "edit-source",
-            default_value = "manual",
-            value_parser = ["manual", "agent", "compile"],
-            help_heading = "Advanced options"
-        )]
-        edit_source: String,
     },
     /// [Data] Update explicit retrieval tags metadata for a file or directory
     #[command(hide = true)]

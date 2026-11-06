@@ -681,7 +681,6 @@ pub(super) async fn dispatch(
             tags,
             tag_mode,
             acl,
-            edit_source,
         } => {
             let effective_mode = if let Some(m) = mode {
                 m
@@ -700,7 +699,6 @@ pub(super) async fn dispatch(
                 tags,
                 tag_mode,
                 acl,
-                edit_source,
                 ctx,
             )
             .await
