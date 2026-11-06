@@ -46,7 +46,8 @@ jobs:
             npm_pkg: compile-darwin-x64
             npm_os: darwin
             npm_cpu: x64
-          - os: macos-15
+          # The Intel runner's Apple SDK supports cross-compilation to ARM64.
+          - os: macos-15-intel
             target: aarch64-apple-darwin
             npm_pkg: compile-darwin-arm64
             npm_os: darwin
