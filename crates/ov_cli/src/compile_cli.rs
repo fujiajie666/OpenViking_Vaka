@@ -654,6 +654,8 @@ enum CompileCommand {
         #[command(subcommand)]
         cmd: CompileSnapshotCommand,
     },
+    /// Quick health check
+    Health,
 }
 
 /// Snapshot access is limited to reading file differences and changed source-file paths.
@@ -729,6 +731,7 @@ pub(super) async fn run() {
     );
 
     let result = match cli.command {
+        CompileCommand::Health => handlers::handle_health(ctx).await,
         CompileCommand::Snapshot { cmd } => {
             let cmd = match cmd {
                 CompileSnapshotCommand::Diff {
@@ -1121,7 +1124,7 @@ mod tests {
     }
 
     #[test]
-    fn exposes_only_retrieval_content_write_and_snapshot_diffs() {
+    fn exposes_only_retrieval_content_write_snapshot_diffs_and_health() {
         let command = CompileCli::command();
         assert_eq!(command.get_name(), "ov");
 
@@ -1133,7 +1136,8 @@ mod tests {
         assert_eq!(
             names,
             [
-                "read", "write", "grep", "glob", "ls", "tree", "find", "search", "snapshot"
+                "read", "write", "grep", "glob", "ls", "tree", "find", "search", "snapshot",
+                "health"
             ]
         );
         assert_eq!(
@@ -1164,7 +1168,7 @@ mod tests {
         let compile_cli = CompileCli::command();
 
         for name in [
-            "read", "write", "grep", "glob", "ls", "tree", "find", "search",
+            "read", "write", "grep", "glob", "ls", "tree", "find", "search", "health",
         ] {
             let full_command = full_cli
                 .get_subcommands()
@@ -1205,6 +1209,14 @@ mod tests {
                 "argument contract differs for snapshot {name}"
             );
         }
+    }
+
+    #[test]
+    fn parses_health_with_json_output() {
+        let cli = CompileCli::try_parse_from(["ov", "--output", "json", "health"])
+            .expect("health command must accept JSON output");
+        assert!(matches!(cli.command, CompileCommand::Health));
+        assert!(matches!(cli.output, OutputArg::Json));
     }
 
     #[test]
