@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::ffi::OsString;
 
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
@@ -702,15 +701,15 @@ pub(super) async fn run() {
     };
 
     let output_format = OutputFormat::from(cli.output);
-    let configured_url = match Config::load_required() {
-        Ok(config) => Some(config.url),
+    let profile = match Config::load_required() {
+        Ok(config) => Some(config),
         Err(Error::MissingConfig) => None,
         Err(error) => {
             print_compile_error(&command_display, &error, output_format, cli.compact);
             std::process::exit(2);
         }
     };
-    let config = match runtime_config(std::env::var(OPENVIKING_API_KEY_ENV).ok(), configured_url) {
+    let config = match runtime_config(std::env::var(OPENVIKING_API_KEY_ENV).ok(), profile) {
         Ok(config) => config,
         Err(error) => {
             print_compile_error(&command_display, &error, output_format, cli.compact);
@@ -1020,8 +1019,8 @@ fn print_compile_error(command: &str, error: &Error, output_format: OutputFormat
     }
 }
 
-/// Validate the required Bearer key and optional HTTP(S) base URL, ignoring other profile credentials.
-fn runtime_config(api_key: Option<String>, service_url: Option<String>) -> Result<Config> {
+/// Build the request config from the profile URL and headers. API-key authentication uses the required environment key.
+fn runtime_config(api_key: Option<String>, profile: Option<Config>) -> Result<Config> {
     let api_key = api_key
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -1035,6 +1034,10 @@ fn runtime_config(api_key: Option<String>, service_url: Option<String>) -> Resul
         .parse::<reqwest::header::HeaderValue>()
         .map_err(|_| Error::Config(format!("{OPENVIKING_API_KEY_ENV} is not a valid API key")))?;
 
+    let (service_url, extra_headers) = match profile {
+        Some(config) => (Some(config.url), config.extra_headers),
+        None => (None, None),
+    };
     let service_url = service_url
         .map(|value| value.trim().trim_end_matches('/').to_string())
         .filter(|value| !value.is_empty())
@@ -1051,13 +1054,17 @@ fn runtime_config(api_key: Option<String>, service_url: Option<String>) -> Resul
         ));
     }
 
+    let mut headers = extra_headers.unwrap_or_default();
+    let auth_header = reqwest::header::AUTHORIZATION.as_str();
+    headers.retain(|name, _| {
+        !name.eq_ignore_ascii_case(auth_header) && !name.eq_ignore_ascii_case("X-API-Key")
+    });
+    headers.insert(auth_header.to_string(), authorization);
+
     Ok(Config {
         url: service_url,
         api_key: None,
-        extra_headers: Some(HashMap::from([(
-            reqwest::header::AUTHORIZATION.as_str().to_string(),
-            authorization,
-        )])),
+        extra_headers: Some(headers),
         echo_command: false,
         ..Config::default()
     })
@@ -1420,7 +1427,10 @@ mod tests {
     fn runtime_config_uses_configured_service_or_default_and_vault_key() {
         let config = runtime_config(
             Some("  secret  ".to_string()),
-            Some(" https://stg.example.com/openviking/ ".to_string()),
+            Some(Config {
+                url: " https://stg.example.com/openviking/ ".to_string(),
+                ..Config::default()
+            }),
         )
         .expect("valid config");
 
@@ -1445,8 +1455,16 @@ mod tests {
     }
 
     #[test]
-    fn runtime_config_preserves_vault_placeholder_in_bearer_header() {
-        let config = runtime_config(Some("ARK_SECRET_PLACEHOLDER".to_string()), None)
+    fn runtime_config_sends_custom_headers_and_reserves_vault_auth() {
+        let profile = serde_json::from_value(serde_json::json!({
+            "extra_headers": {
+                "X-Compile-Probe": "marker",
+                "AUTHORIZATION": "Bearer from-file",
+                "x-API-KEY": "from-file"
+            }
+        }))
+        .unwrap();
+        let config = runtime_config(Some("ARK_SECRET_PLACEHOLDER".to_string()), Some(profile))
             .expect("Vault placeholder should be accepted");
         let client = crate::base_client::BaseClient::new(
             &config.url,
@@ -1459,6 +1477,8 @@ mod tests {
             config.extra_headers.clone(),
         );
         let headers = client.build_headers();
+        assert_eq!(config.url, crate::config::DEFAULT_CUSTOM_URL);
+        assert_eq!(headers.get("X-Compile-Probe").unwrap(), "marker");
 
         assert_eq!(
             headers

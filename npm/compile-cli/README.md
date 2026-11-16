@@ -5,13 +5,13 @@ OpenViking retrieval and content-write CLI for cloud agents. The package install
 ## Install
 
 ```bash
-npm i -g @openviking/compile@0.1.9
+npm i -g @openviking/compile@0.1.11
 ```
 
 Do not install this package globally alongside `@openviking/cli`; both packages provide an executable named `ov`. Install one package globally, or run this restricted distribution in an isolated project with `npm exec`.
 
 ```bash
-npm exec --yes --package=@openviking/compile@0.1.9 -- ov --help
+npm exec --yes --package=@openviking/compile@0.1.11 -- ov --help
 ```
 
 ## Authentication
@@ -28,24 +28,28 @@ the environment and replace it at the network egress. The native CLI trusts
 both Mozilla public roots and certificates installed in the operating
 system's trust store, including sandbox egress gateway CAs.
 
-The API endpoint defaults to:
+Without a config file, the API endpoint defaults to:
 
 ```text
 https://api.vikingdb.cn-beijing.volces.com/openviking
 ```
 
-To use another OpenViking data-plane endpoint, write its URL to
-`~/.openviking/ovcli.conf`:
+Set the endpoint and custom request headers in `~/.openviking/ovcli.conf`.
+A config file that omits `url` uses `http://127.0.0.1:1933`.
 
 ```json
 {
-  "url": "https://openviking.example.com/openviking"
+  "url": "https://openviking.example.com/openviking",
+  "extra_headers": {
+    "X-Request-Source": "compile"
+  }
 }
 ```
 
-Only the URL is read from this file. Authentication still comes exclusively
-from `OPENVIKING_API_KEY`; credentials in `ovcli.conf` are ignored. Set
-`OPENVIKING_CLI_CONFIG_FILE` to select a different config file.
+Header names and values are strings. `Authorization` and `X-API-Key` are reserved
+for API-key authentication, regardless of casing. `X-Gateway-Token` follows the
+standard CLI gateway challenge flow. Use `OPENVIKING_CLI_CONFIG_FILE` to select
+a different config file.
 
 ## Commands
 
